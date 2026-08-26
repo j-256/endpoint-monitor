@@ -1,0 +1,9 @@
+.dev.vars
+.dev.vars.*
+.wrangler/
+coverage/
+dist/
+endpoint-monitor.json
+node_modules/
+wrangler.jsonc
+.DS_Store

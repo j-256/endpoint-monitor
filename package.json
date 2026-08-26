@@ -1,0 +1,29 @@
+{
+  "name": "endpoint-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A portable detector for explicit HTTP endpoints with durable incident transitions",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "endpoint-monitor": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "npm test && npm run test:coverage && npm run check:publication && npm run deploy:dry-run",
+    "check:publication": "node scripts/check-publication.mjs",
+    "configure:cloudflare": "node scripts/configure-cloudflare.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply endpoint-monitor --local",
+    "db:migrate:remote": "wrangler d1 migrations apply endpoint-monitor --remote",
+    "deploy": "wrangler deploy",
+    "deploy:dry-run": "wrangler deploy --dry-run --config wrangler.example.jsonc",
+    "dev": "wrangler dev",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.126.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "defaults": {
+    "failureThreshold": 2,
+    "method": "GET",
+    "probeIntervalMinutes": 5,
+    "recoveryThreshold": 2,
+    "timeoutMilliseconds": 10000
+  },
+  "schemaVersion": 1,
+  "targets": [
+    {
+      "id": "example-home",
+      "url": "https://example.com/"
+    },
+    {
+      "expectedStatuses": [
+        200,
+        204
+      ],
+      "id": "example-health",
+      "method": "GET",
+      "url": "https://status.example.net/health"
+    }
+  ]
+}
