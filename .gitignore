@@ -1,5 +1,6 @@
 .dev.vars
 .dev.vars.*
+.endpoint-monitor.local.json
 .wrangler/
 coverage/
 dist/

@@ -128,7 +128,14 @@ test("configuration rejects ambiguous or unsafe target values", () => {
     { id: "Bad_ID", url: "https://example.com/" },
     { id: "credentials", url: "https://user:pass@example.com/" },
     { id: "fragment", url: "https://example.com/#private" },
+    { id: "internal", url: "http://service.internal/" },
+    { id: "ipv4", url: "http://127.0.0.1/" },
+    { id: "ipv6", url: "http://[::1]/" },
+    { id: "localhost", url: "http://localhost/" },
     { id: "method", method: "POST", url: "https://example.com/" },
+    { id: "onion", url: "http://service.onion/" },
+    { id: "reserved", url: "http://service.example/" },
+    { id: "single-label", url: "http://intranet/" },
     { expectedStatuses: [200, 200], id: "statuses", url: "https://example.com/" },
   ]) {
     assert.throws(() => normalizeConfiguration(configuration({ targets: [target] })))

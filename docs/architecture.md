@@ -1,0 +1,67 @@
+# Architecture
+
+Endpoint Monitor separates monitoring policy from hosting and provider integrations. The explicit configuration is the only source of target identity; all observations must map back to one configured target before they can affect state.
+
+```text
+operator configuration
+        |
+        v
+deterministic scheduler ---> active HTTP probes
+        |                         |
+        |                         v
+        +-----------------> observation reducer <--- optional provider signals
+                                  |
+                                  v
+                       exceptional state + incidents
+                                  |
+                                  v
+                         transition outbox ---> delivery adapter
+```
+
+## Runtime-neutral core
+
+`src/config.mjs` validates schema version 1, resolves defaults, canonicalizes URLs, and computes target fingerprints. Target fingerprints include every behavior-affecting field so a changed target cannot inherit stale candidate or incident state.
+
+`src/schedule.mjs` sorts targets by a stable hash of their IDs and selects a deterministic interval shard. An adapter supplies its per-run ceiling. If the busiest shard exceeds that ceiling, scheduling fails explicitly.
+
+`src/probe.mjs` performs exact `GET` or `HEAD` requests with manual redirects and timeouts. It returns provider-neutral HTTP or network observations and never persists them.
+
+`src/core.mjs` is a pure incident state machine. Healthy targets without exceptional state remain absent. Ordinary failures create or advance candidates, selected edge and origin statuses open immediately, and consecutive active successes recover incidents. Provider observations can open but cannot recover incidents.
+
+`src/hookrelay.mjs` validates structured CloudEvents subscription URLs and signs exact serialized bytes. Delivery transport remains an adapter responsibility.
+
+## Adapter contract
+
+A runtime adapter is responsible for:
+
+- Loading one validated explicit configuration
+- Calling `probeSchedule` at a stable interval and refusing over-capacity configuration
+- Supplying bounded HTTP execution to `probeTargets`
+- Loading exceptional target state before reduction
+- Persisting state and incident changes atomically
+- Creating and retrying transition delivery without duplicating events
+- Reconciling configuration fingerprints and suppressing stale incidents
+- Emitting bounded diagnostics without secret or URL leakage
+- Applying retention to provider signals, delivered outbox rows, and resolved incidents
+
+Provider enrichment is optional. It must filter to configured targets, validate provider ownership independently, deduplicate overlapping windows, and yield to a newer successful active probe.
+
+## Cloudflare adapter
+
+The Cloudflare adapter stores configuration, sparse state, incidents, provider-signal fingerprints, and an outbox in D1. A scheduled Worker runs probe, optional analytics, delivery, and hourly maintenance phases under one outbound budget.
+
+Cloudflare analytics queries only selected failure statuses for configured hostnames with `requestSource: "eyeball"`. A result is accepted only when its zone belongs to the configured account and its hostname and path exactly match a configured target. Targets with query strings receive active probes but no analytics enrichment because the dataset exposes path separately from query.
+
+Delivery can use a Hookrelay service binding or direct public HTTPS. Both paths share the same explicit subrequest budget. The body stored in the outbox is the body that is signed and sent, so retries preserve event identity and exact bytes.
+
+## Configuration changes
+
+Changing any target field changes its fingerprint. On the next scheduled invocation, the adapter resolves an open incident as `configuration-changed`, clears its sparse state, and emits no misleading recovery event. Removing a target behaves the same way with `configuration-removed`.
+
+An incident opened with delivery disabled has no outbox row. When delivery is enabled, the adapter creates the missing problem event for every still-open incident before normal delivery. Incidents that opened and recovered entirely in shadow mode stay historical and do not alert retroactively.
+
+## Consistency and failure behavior
+
+D1 batches group state, incident, and outbox mutations for one transition. Unique indices prevent two open incidents per target and duplicate transition events. Scheduled invocations are expected not to overlap at normal probe timeouts, but those database constraints remain the last line of defense.
+
+Probe network exceptions become fixed observation codes. Optional analytics errors become fixed error-level Observability records while active probes continue. Critical configuration, D1, scheduling, or subrequest-budget errors fail the scheduled invocation with a bounded code so platform invocation health records the failure.

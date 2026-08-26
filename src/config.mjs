@@ -24,6 +24,16 @@ const TARGET_KEYS = new Set([
 const HTTP_METHODS = new Set(["GET", "HEAD"])
 const TARGET_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const MAXIMUM_TARGETS = 1000
+const NON_PUBLIC_HOSTNAME_SUFFIXES = Object.freeze([
+  ".example",
+  ".home.arpa",
+  ".internal",
+  ".invalid",
+  ".local",
+  ".localhost",
+  ".onion",
+  ".test",
+])
 
 function objectValue(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -60,6 +70,16 @@ function targetId(value) {
   return value
 }
 
+function publicDnsHostname(value) {
+  const hostname = value.toLowerCase().replace(/\.$/, "")
+  return hostname.includes(".")
+    && !hostname.startsWith("[")
+    && !/^\d+(?:\.\d+){3}$/.test(hostname)
+    && !NON_PUBLIC_HOSTNAME_SUFFIXES.some((suffix) => (
+      hostname === suffix.slice(1) || hostname.endsWith(suffix)
+    ))
+}
+
 function targetUrl(value) {
   if (typeof value !== "string" || value !== value.trim()) {
     throw new TypeError("Target URL must be a trimmed string")
@@ -74,8 +94,8 @@ function targetUrl(value) {
     || url.username
     || url.password
     || url.hash
-    || !url.hostname) {
-    throw new TypeError("Target URL must be a public HTTP or HTTPS URL without credentials or a fragment")
+    || !publicDnsHostname(url.hostname)) {
+    throw new TypeError("Target URL must use a public DNS hostname without credentials or a fragment")
   }
   return url.toString()
 }
