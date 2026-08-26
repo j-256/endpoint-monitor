@@ -29,6 +29,7 @@ export async function probeTarget(fetchImpl, target, observedAt) {
     } catch {}
     return observation
   } catch (error) {
+    if (error?.name === "SubrequestBudgetError") throw error
     return networkObservation(networkErrorCode(error), observedAt)
   }
 }

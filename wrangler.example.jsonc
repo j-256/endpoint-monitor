@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "endpoint-monitor",
+  "main": "src/adapters/cloudflare/worker.mjs",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": [
+    "global_fetch_strictly_public"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "MONITOR_DB",
+      "database_name": "endpoint-monitor",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [],
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "vars": {
+    "CLOUDFLARE_ANALYTICS_ENABLED": "false",
+    "CLOUDFLARE_ACCOUNT_ID": "00000000000000000000000000000000",
+    "ENDPOINT_MONITOR_DELIVERY_ENABLED": "false",
+    "ENDPOINT_MONITOR_ENABLED": "false",
+    "ENDPOINT_MONITOR_STATUS_ENABLED": "false"
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}
