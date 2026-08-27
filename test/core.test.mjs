@@ -24,6 +24,7 @@ const RECOVERED_AT = "2026-08-26T03:10:00.000Z"
 function target(overrides = {}) {
   return {
     configFingerprint: "sha256:target",
+    expect: null,
     expectedStatuses: null,
     failureThreshold: 2,
     id: "example-home",
@@ -55,6 +56,36 @@ test("exact expected statuses enable application-aware checks", () => {
     httpObservation(configured, 302, OBSERVED_AT).outcome,
     OBSERVATION_OUTCOME.FAILURE,
   )
+})
+
+test("response validation failures retain status and fixed error identity", () => {
+  const configured = target({ expectedStatuses: [200] })
+  const observation = httpObservation(
+    configured,
+    200,
+    OBSERVED_AT,
+    "json-subset-mismatch",
+  )
+  assert.equal(observation.outcome, OBSERVATION_OUTCOME.FAILURE)
+  assert.equal(observation.httpStatus, 200)
+  assert.equal(observation.errorCode, "json-subset-mismatch")
+  assert.equal(observation.immediate, false)
+  const incident = createIncident(
+    configured,
+    observation,
+    "incident-validation",
+    OBSERVED_AT,
+  )
+  assert.match(
+    createIncidentCloudEvent(incident, TRANSITION.OPENED).title,
+    /HTTP 200 \(json-subset-mismatch\)/,
+  )
+  assert.throws(() => httpObservation(
+    configured,
+    200,
+    OBSERVED_AT,
+    "Invalid_Code",
+  ))
 })
 
 test("an HTTP 526 opens an incident immediately", () => {

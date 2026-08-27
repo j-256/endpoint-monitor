@@ -1,6 +1,7 @@
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIGURATION,
+  SUPPORTED_CONFIG_SCHEMA_VERSIONS,
 } from "./constants.mjs"
 import { sha256Hex } from "./crypto.mjs"
 
@@ -21,8 +22,20 @@ const TARGET_KEYS = new Set([
   "timeoutMilliseconds",
   "url",
 ])
+const TARGET_KEYS_V2 = new Set([...TARGET_KEYS, "expect"])
+const EXPECTATION_KEYS = new Set([
+  "bodyIncludes",
+  "contentType",
+  "jsonSubset",
+  "location",
+])
+const LOCATION_KEYS = new Set(["ignoreQuery", "url"])
 const HTTP_METHODS = new Set(["GET", "HEAD"])
+const MEDIA_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/
 const TARGET_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+const MAXIMUM_BODY_MARKER_BYTES = 1024
+const MAXIMUM_JSON_SUBSET_BYTES = 4096
+const MAXIMUM_JSON_SUBSET_DEPTH = 8
 const MAXIMUM_TARGETS = 1000
 const NON_PUBLIC_HOSTNAME_SUFFIXES = Object.freeze([
   ".example",
@@ -80,24 +93,28 @@ function publicDnsHostname(value) {
     ))
 }
 
-function targetUrl(value) {
+function publicUrl(value, label) {
   if (typeof value !== "string" || value !== value.trim()) {
-    throw new TypeError("Target URL must be a trimmed string")
+    throw new TypeError(`${label} must be a trimmed string`)
   }
   let url
   try {
     url = new URL(value)
   } catch {
-    throw new TypeError("Target URL must be an absolute HTTP or HTTPS URL")
+    throw new TypeError(`${label} must be an absolute HTTP or HTTPS URL`)
   }
   if (!["http:", "https:"].includes(url.protocol)
     || url.username
     || url.password
     || url.hash
     || !publicDnsHostname(url.hostname)) {
-    throw new TypeError("Target URL must use a public DNS hostname without credentials or a fragment")
+    throw new TypeError(`${label} must use a public DNS hostname without credentials or a fragment`)
   }
   return url.toString()
+}
+
+function targetUrl(value) {
+  return publicUrl(value, "Target URL")
 }
 
 function expectedStatuses(value) {
@@ -112,6 +129,123 @@ function expectedStatuses(value) {
     throw new TypeError("Expected statuses must be unique")
   }
   return Object.freeze(statuses.sort((left, right) => left - right))
+}
+
+function encodedLength(value) {
+  return new TextEncoder().encode(value).byteLength
+}
+
+function bodyMarker(value) {
+  if (typeof value !== "string"
+    || value.trim().length === 0
+    || encodedLength(value) > MAXIMUM_BODY_MARKER_BYTES) {
+    throw new TypeError("Expected body marker must be a non-empty string of at most 1024 bytes")
+  }
+  return value
+}
+
+function contentType(value) {
+  if (typeof value !== "string") {
+    throw new TypeError("Expected content type must be a media type")
+  }
+  const normalized = value.trim().toLowerCase()
+  if (!MEDIA_TYPE_PATTERN.test(normalized)) {
+    throw new TypeError("Expected content type must be a media type without parameters")
+  }
+  return normalized
+}
+
+function normalizeJsonValue(value, depth, seen) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "object" || depth > MAXIMUM_JSON_SUBSET_DEPTH) {
+    throw new TypeError("Expected JSON subset must contain bounded JSON values")
+  }
+  if (seen.has(value)) {
+    throw new TypeError("Expected JSON subset must not contain cycles")
+  }
+  seen.add(value)
+  let normalized
+  if (Array.isArray(value)) {
+    normalized = Object.freeze(value.map((entry) => (
+      normalizeJsonValue(entry, depth + 1, seen)
+    )))
+  } else {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("Expected JSON subset must contain plain JSON objects")
+    }
+    normalized = Object.freeze(Object.fromEntries(
+      Object.keys(value).sort().map((key) => [
+        key,
+        normalizeJsonValue(value[key], depth + 1, seen),
+      ]),
+    ))
+  }
+  seen.delete(value)
+  return normalized
+}
+
+function jsonSubset(value) {
+  if (value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.keys(value).length === 0) {
+    throw new TypeError("Expected JSON subset must be a non-empty object")
+  }
+  const normalized = normalizeJsonValue(value, 0, new WeakSet())
+  if (encodedLength(JSON.stringify(normalized)) > MAXIMUM_JSON_SUBSET_BYTES) {
+    throw new TypeError("Expected JSON subset must be at most 4096 bytes")
+  }
+  return normalized
+}
+
+function locationExpectation(value) {
+  const candidate = objectValue(value, "Expected location")
+  rejectUnknownKeys(candidate, LOCATION_KEYS, "Expected location")
+  if (candidate.ignoreQuery !== undefined
+    && typeof candidate.ignoreQuery !== "boolean") {
+    throw new TypeError("Expected location ignoreQuery must be boolean")
+  }
+  return Object.freeze({
+    ignoreQuery: candidate.ignoreQuery ?? false,
+    url: publicUrl(candidate.url, "Expected location URL"),
+  })
+}
+
+function responseExpectation(value, method, statuses) {
+  if (value === undefined) return null
+  const candidate = objectValue(value, "Target expectation")
+  rejectUnknownKeys(candidate, EXPECTATION_KEYS, "Target expectation")
+  if (Object.keys(candidate).length === 0) {
+    throw new TypeError("Target expectation must contain at least one assertion")
+  }
+  const normalized = Object.freeze({
+    ...(candidate.bodyIncludes !== undefined
+      ? { bodyIncludes: bodyMarker(candidate.bodyIncludes) }
+      : {}),
+    ...(candidate.contentType !== undefined
+      ? { contentType: contentType(candidate.contentType) }
+      : {}),
+    ...(candidate.jsonSubset !== undefined
+      ? { jsonSubset: jsonSubset(candidate.jsonSubset) }
+      : {}),
+    ...(candidate.location !== undefined
+      ? { location: locationExpectation(candidate.location) }
+      : {}),
+  })
+  if (method === "HEAD"
+    && (normalized.bodyIncludes !== undefined
+      || normalized.jsonSubset !== undefined)) {
+    throw new TypeError("HEAD targets cannot assert response bodies")
+  }
+  if (normalized.location
+    && (!statuses || statuses.some((status) => status < 300 || status > 399))) {
+    throw new TypeError("Location assertions require explicit 3xx expected statuses")
+  }
+  return normalized
 }
 
 function normalizeDefaults(value = {}) {
@@ -149,11 +283,18 @@ function normalizeDefaults(value = {}) {
   })
 }
 
-function normalizeTarget(value, defaults) {
+function normalizeTarget(value, defaults, schemaVersion) {
   const candidate = objectValue(value, "Target")
-  rejectUnknownKeys(candidate, TARGET_KEYS, "Target")
+  rejectUnknownKeys(
+    candidate,
+    schemaVersion === CONFIG_SCHEMA_VERSION ? TARGET_KEYS_V2 : TARGET_KEYS,
+    "Target",
+  )
+  const method = methodValue(candidate.method ?? defaults.method, "Target method")
+  const statuses = expectedStatuses(candidate.expectedStatuses)
   return Object.freeze({
-    expectedStatuses: expectedStatuses(candidate.expectedStatuses),
+    expect: responseExpectation(candidate.expect, method, statuses),
+    expectedStatuses: statuses,
     failureThreshold: boundedInteger(
       candidate.failureThreshold ?? defaults.failureThreshold,
       "Target failure threshold",
@@ -161,7 +302,7 @@ function normalizeTarget(value, defaults) {
       10,
     ),
     id: targetId(candidate.id),
-    method: methodValue(candidate.method ?? defaults.method, "Target method"),
+    method,
     recoveryThreshold: boundedInteger(
       candidate.recoveryThreshold ?? defaults.recoveryThreshold,
       "Target recovery threshold",
@@ -181,14 +322,16 @@ function normalizeTarget(value, defaults) {
 export function normalizeConfiguration(value) {
   const candidate = objectValue(value, "Endpoint Monitor configuration")
   rejectUnknownKeys(candidate, CONFIGURATION_KEYS, "Endpoint Monitor configuration")
-  if (candidate.schemaVersion !== CONFIG_SCHEMA_VERSION) {
-    throw new TypeError(`Configuration schemaVersion must be ${CONFIG_SCHEMA_VERSION}`)
+  if (!SUPPORTED_CONFIG_SCHEMA_VERSIONS.includes(candidate.schemaVersion)) {
+    throw new TypeError(`Configuration schemaVersion must be one of ${SUPPORTED_CONFIG_SCHEMA_VERSIONS.join(", ")}`)
   }
   if (!Array.isArray(candidate.targets) || candidate.targets.length > MAXIMUM_TARGETS) {
     throw new TypeError(`Configuration targets must be an array with at most ${MAXIMUM_TARGETS} entries`)
   }
   const defaults = normalizeDefaults(candidate.defaults)
-  const targets = candidate.targets.map((target) => normalizeTarget(target, defaults))
+  const targets = candidate.targets.map((target) => (
+    normalizeTarget(target, defaults, candidate.schemaVersion)
+  ))
   const ids = new Set()
   const urls = new Set()
   for (const target of targets) {
@@ -199,13 +342,14 @@ export function normalizeConfiguration(value) {
   }
   return Object.freeze({
     defaults,
-    schemaVersion: CONFIG_SCHEMA_VERSION,
+    schemaVersion: candidate.schemaVersion,
     targets: Object.freeze(targets),
   })
 }
 
 function targetFingerprintInput(target) {
   return JSON.stringify({
+    ...(target.expect ? { expect: target.expect } : {}),
     expectedStatuses: target.expectedStatuses,
     failureThreshold: target.failureThreshold,
     id: target.id,
@@ -230,6 +374,9 @@ export function portableConfiguration(configuration) {
     defaults: { ...normalized.defaults },
     schemaVersion: normalized.schemaVersion,
     targets: normalized.targets.map((target) => ({
+      ...(target.expect
+        ? { expect: JSON.parse(JSON.stringify(target.expect)) }
+        : {}),
       ...(target.expectedStatuses
         ? { expectedStatuses: [...target.expectedStatuses] }
         : {}),

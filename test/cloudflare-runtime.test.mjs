@@ -97,6 +97,67 @@ test("healthy scheduled runs perform zero D1 writes", async (context) => {
   assert.equal(logger.entries.at(-1).value.event, "endpoint_monitor.run")
 })
 
+test("healthy response validations perform zero D1 writes", async (context) => {
+  const db = d1Fixture(context)
+  await seedConfiguration(db, {
+    ...configuration([{
+      expect: {
+        contentType: "application/json",
+        jsonSubset: { ok: true },
+      },
+      expectedStatuses: [200],
+      id: "example-health",
+      url: "https://example.com/health",
+    }]),
+    schemaVersion: 2,
+  })
+  const before = totalChanges(db)
+  const summary = await runCloudflareScheduled(
+    runtimeEnv(db),
+    RUN_MILLISECONDS,
+    {
+      clock: () => RUN_MILLISECONDS,
+      fetchImpl: async () => Response.json({ detail: "ignored", ok: true }),
+      logger: loggerFixture(),
+    },
+  )
+  assert.equal(summary.succeededProbes, 1)
+  assert.equal(summary.failedProbes, 0)
+  assert.equal(summary.d1Writes, 0)
+  assert.equal(totalChanges(db), before)
+})
+
+test("response validation failures persist only fixed diagnostics", async (context) => {
+  const db = d1Fixture(context)
+  await seedConfiguration(db, {
+    ...configuration([{
+      expect: { jsonSubset: { ok: true } },
+      expectedStatuses: [200],
+      failureThreshold: 1,
+      id: "example-health",
+      url: "https://example.com/health",
+    }]),
+    schemaVersion: 2,
+  })
+  const logger = loggerFixture()
+  const summary = await runCloudflareScheduled(
+    runtimeEnv(db),
+    RUN_MILLISECONDS,
+    {
+      clock: () => RUN_MILLISECONDS,
+      fetchImpl: async () => Response.json({ ok: false, private: "detail" }),
+      logger,
+      randomUUID: () => "incident-validation",
+    },
+  )
+  const status = await readMonitorStatus(db)
+  assert.equal(summary.failedProbes, 1)
+  assert.equal(summary.transitions, 1)
+  assert.equal(status.openIncidents[0].errorCode, "json-subset-mismatch")
+  assert.equal(status.openIncidents[0].latestStatus, 200)
+  assert.equal(JSON.stringify(logger.entries).includes("private"), false)
+})
+
 test("disabled scheduled runs do not require bindings or subrequests", async () => {
   const logger = loggerFixture()
   const summary = await runCloudflareScheduled(

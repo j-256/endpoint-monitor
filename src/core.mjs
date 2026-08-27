@@ -25,20 +25,30 @@ function targetInput(target) {
   return target
 }
 
-export function httpObservation(target, status, observedAt) {
+function probeErrorCode(value) {
+  if (value !== null
+    && (typeof value !== "string" || !/^[a-z][a-z0-9-]*$/.test(value))) {
+    throw new TypeError("Probe error code is invalid")
+  }
+  return value
+}
+
+export function httpObservation(target, status, observedAt, errorCode = null) {
   targetInput(target)
   if (!Number.isInteger(status) || status < 100 || status > 599) {
     throw new TypeError("Probe HTTP status is invalid")
   }
   const observed = timestamp(observedAt, "Probe observation time")
-  const healthy = target.expectedStatuses
+  const normalizedErrorCode = probeErrorCode(errorCode)
+  const statusHealthy = target.expectedStatuses
     ? target.expectedStatuses.includes(status)
     : status < 500
+  const healthy = statusHealthy && normalizedErrorCode === null
   return Object.freeze({
-    errorCode: null,
+    errorCode: normalizedErrorCode,
     failureKind: healthy ? null : FAILURE_KIND.HTTP,
     httpStatus: status,
-    immediate: !healthy && IMMEDIATE_STATUS_SET.has(status),
+    immediate: !statusHealthy && IMMEDIATE_STATUS_SET.has(status),
     observedAt: observed,
     outcome: healthy ? OBSERVATION_OUTCOME.SUCCESS : OBSERVATION_OUTCOME.FAILURE,
     requestCount: null,
@@ -47,7 +57,7 @@ export function httpObservation(target, status, observedAt) {
 }
 
 export function networkObservation(errorCode, observedAt) {
-  if (typeof errorCode !== "string" || !/^[a-z][a-z0-9-]*$/.test(errorCode)) {
+  if (probeErrorCode(errorCode) === null) {
     throw new TypeError("Probe error code is invalid")
   }
   return Object.freeze({
@@ -231,6 +241,9 @@ export function suppressIncident(incident, resolvedAt, reason) {
 }
 
 function failureLabel(incident) {
+  if (incident.latestStatus && incident.errorCode) {
+    return `HTTP ${incident.latestStatus} (${incident.errorCode})`
+  }
   return incident.latestStatus
     ? `HTTP ${incident.latestStatus}`
     : "a network failure"

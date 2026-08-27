@@ -56,7 +56,7 @@ Add `--json` to `config validate` or `probe` for machine-readable output. A fail
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "defaults": {
     "failureThreshold": 2,
     "method": "GET",
@@ -66,13 +66,34 @@ Add `--json` to `config validate` or `probe` for machine-readable output. A fail
   },
   "targets": [
     {
+      "expect": {
+        "bodyIncludes": "Example Domain",
+        "contentType": "text/html"
+      },
+      "expectedStatuses": [200],
       "id": "example-home",
       "url": "https://example.com/"
     },
     {
-      "expectedStatuses": [200, 204],
+      "expect": {
+        "contentType": "application/json",
+        "jsonSubset": {
+          "ok": true
+        }
+      },
+      "expectedStatuses": [200],
       "id": "example-health",
       "url": "https://status.example.net/health"
+    },
+    {
+      "expect": {
+        "location": {
+          "url": "https://example.org/docs?probe=1"
+        }
+      },
+      "expectedStatuses": [301],
+      "id": "example-redirect",
+      "url": "https://old.example.org/docs?probe=1"
     }
   ]
 }
@@ -83,6 +104,15 @@ Add `--json` to `config validate` or `probe` for machine-readable output. A fail
 `method` is `GET` or `HEAD`. Redirects are not followed, so the configured host and route are what the probe verifies. `failureThreshold`, `recoveryThreshold`, and `timeoutMilliseconds` may be overridden per target.
 
 By default, any response below HTTP 500 proves reachability. HTTP 520 through 526 and 530 open an incident immediately; other server responses and network failures use `failureThreshold`. Supply `expectedStatuses` only when the endpoint has a narrower application contract. Only successful active probes can resolve an incident.
+
+Schema version 1 remains accepted for status-only documents. Schema version 2 adds the optional `expect` object:
+
+- `contentType` matches the media type case-insensitively and ignores parameters such as `charset`
+- `bodyIncludes` requires one non-empty text marker of at most 1,024 bytes
+- `jsonSubset` recursively requires the configured object properties while allowing extra response properties; configured arrays match exactly
+- `location` resolves the response header against the target URL and compares normalized URL components; set `ignoreQuery` to `true` only when query differences are intentionally irrelevant
+
+Location validation requires explicit 3xx `expectedStatuses`. Body validation requires `GET`. Status is checked before other expectations. Text markers are searched within at most the first 64 KiB and stop the read as soon as they match; JSON validation requires a complete body within that limit. Read content is discarded immediately and never included in diagnostics. A failed expectation records the observed HTTP status plus a fixed error code and follows the configured failure threshold.
 
 ## Cloudflare deployment
 
@@ -120,7 +150,7 @@ endpoint-monitor probe
 endpoint-monitor config sync
 ```
 
-`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
+`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
 
 Install only the secrets required by selected features through concealed Wrangler input:
 
@@ -161,7 +191,7 @@ The exact serialized body is signed as `X-Hookrelay-Signature-256: sha256=<hex>`
 
 `GET /healthz` returns only service liveness. `/api/status` is hidden unless status is enabled and requires `Authorization: Bearer <ENDPOINT_MONITOR_STATUS_TOKEN>`. Its protected response includes target URLs, schedule capacity, exceptional states, incidents, and delivery backlog.
 
-Custom logs contain fixed event names, target IDs, statuses, bounded error codes, counts, and incident IDs. They exclude URLs, query strings, exception messages, Hookrelay paths, signatures, HMACs, API response bodies, and secret values.
+Custom logs contain fixed event names, target IDs, statuses, bounded error codes, counts, and incident IDs. They exclude URLs, query strings, response headers, exception messages, Hookrelay paths, signatures, HMACs, API response bodies, and secret values.
 
 ## Portability
 

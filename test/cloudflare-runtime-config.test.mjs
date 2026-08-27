@@ -90,7 +90,11 @@ test("stored configuration rejects missing, invalid, and mismatched data", async
   )
 
   const invalid = d1Fixture(context)
-  insertConfiguration(invalid, '{"schemaVersion":2,"targets":[]}')
+  insertConfiguration(
+    invalid,
+    '{"schemaVersion":3,"targets":[]}',
+    { schemaVersion: 3 },
+  )
   await assert.rejects(
     loadStoredConfiguration(invalid),
     (error) => error.code === "monitor-configuration-invalid",
@@ -127,4 +131,34 @@ test("stored configuration rejects invalid JSON from an untrusted binding", asyn
     loadStoredConfiguration(db),
     (error) => error.code === "monitor-configuration-invalid",
   )
+})
+
+test("stored configuration accepts schema version 2 expectations", async (context) => {
+  const db = d1Fixture(context)
+  const configJson = JSON.stringify({
+    defaults: {
+      failureThreshold: 2,
+      method: "GET",
+      probeIntervalMinutes: 5,
+      recoveryThreshold: 2,
+      timeoutMilliseconds: 10000,
+    },
+    schemaVersion: 2,
+    targets: [{
+      expect: { jsonSubset: { ok: true } },
+      expectedStatuses: [200],
+      failureThreshold: 2,
+      id: "example-health",
+      method: "GET",
+      recoveryThreshold: 2,
+      timeoutMilliseconds: 10000,
+      url: "https://example.com/health",
+    }],
+  })
+  insertConfiguration(db, configJson, {
+    schemaVersion: 2,
+    targetCount: 1,
+  })
+  const loaded = await loadStoredConfiguration(db)
+  assert.deepEqual(loaded.targets[0].expect.jsonSubset, { ok: true })
 })

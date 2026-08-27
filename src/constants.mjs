@@ -1,4 +1,6 @@
-export const CONFIG_SCHEMA_VERSION = 1
+export const CONFIG_SCHEMA_VERSION = 2
+
+export const SUPPORTED_CONFIG_SCHEMA_VERSIONS = Object.freeze([1, 2])
 
 export const DEFAULT_CONFIGURATION = Object.freeze({
   failureThreshold: 2,

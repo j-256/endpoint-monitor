@@ -20,11 +20,11 @@ deterministic scheduler ---> active HTTP probes
 
 ## Runtime-neutral core
 
-`src/config.mjs` validates schema version 1, resolves defaults, canonicalizes URLs, and computes target fingerprints. Target fingerprints include every behavior-affecting field so a changed target cannot inherit stale candidate or incident state.
+`src/config.mjs` accepts status-only schema version 1 documents and schema version 2 response expectations, resolves defaults, canonicalizes URLs, and computes target fingerprints. Target fingerprints include every behavior-affecting field so a changed target cannot inherit stale candidate or incident state.
 
 `src/schedule.mjs` sorts targets by a stable hash of their IDs and selects a deterministic interval shard. An adapter supplies its per-run ceiling. If the busiest shard exceeds that ceiling, scheduling fails explicitly.
 
-`src/probe.mjs` performs exact `GET` or `HEAD` requests with manual redirects and timeouts. It returns provider-neutral HTTP or network observations and never persists them.
+`src/probe.mjs` performs exact `GET` or `HEAD` requests with manual redirects and timeouts. It validates normalized redirect locations, media types, bounded text markers, and JSON subsets when configured. Text markers search a bounded prefix and stop the response read on a match; JSON validation requires a complete body within the same 64 KiB cap. Read content is discarded after validation and never returned in observations.
 
 `src/core.mjs` is a pure incident state machine. Healthy targets without exceptional state remain absent. Ordinary failures create or advance candidates, selected edge and origin statuses open immediately, and consecutive active successes recover incidents. Provider observations can open but cannot recover incidents.
 
@@ -64,4 +64,4 @@ An incident opened with delivery disabled has no outbox row. When delivery is en
 
 D1 batches group state, incident, and outbox mutations for one transition. Unique indices prevent two open incidents per target and duplicate transition events. Scheduled invocations are expected not to overlap at normal probe timeouts, but those database constraints remain the last line of defense.
 
-Probe network exceptions become fixed observation codes. Optional analytics errors become fixed error-level Observability records while active probes continue. Critical configuration, D1, scheduling, or subrequest-budget errors fail the scheduled invocation with a bounded code so platform invocation health records the failure.
+Probe network exceptions and response validation failures become fixed observation codes. Optional analytics errors become fixed error-level Observability records while active probes continue. Critical configuration, D1, scheduling, or subrequest-budget errors fail the scheduled invocation with a bounded code so platform invocation health records the failure.

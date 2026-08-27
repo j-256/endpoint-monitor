@@ -71,7 +71,7 @@ const PROFILE_COMMANDS = new Set([
   COMMAND.TARGETS,
 ])
 const OPERATOR_PROFILE_HELP = "The mode-0600 operator profile is created by endpoint-monitor cloudflare configure and names the active target document and generated Wrangler configuration."
-const TARGET_DOCUMENT_HELP = "Target documents are JSON with schemaVersion 1, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url."
+const TARGET_DOCUMENT_HELP = "Target documents are JSON with schemaVersion 1 or 2, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url."
 
 class CliError extends Error {
   constructor(message, exitCode = EXIT.USAGE) {
@@ -426,6 +426,7 @@ function probeResult(entry) {
 
 function targetList(loaded) {
   return loaded.portable.targets.map((target) => ({
+    expect: target.expect ?? null,
     expectedStatuses: target.expectedStatuses ?? null,
     id: target.id,
     method: target.method,
@@ -433,13 +434,24 @@ function targetList(loaded) {
   }))
 }
 
+function expectationLabel(expect) {
+  if (!expect) return "-"
+  return Object.keys(expect).map((key) => ({
+    bodyIncludes: "body",
+    contentType: "content-type",
+    jsonSubset: "json-subset",
+    location: "location",
+  })[key]).join(",")
+}
+
 function textTargetList(targets) {
-  const lines = ["ID\tMETHOD\tEXPECTED\tURL"]
+  const lines = ["ID\tMETHOD\tEXPECTED\tVALIDATION\tURL"]
   for (const target of targets) {
     lines.push([
       target.id,
       target.method,
       target.expectedStatuses?.join(",") ?? "<500",
+      expectationLabel(target.expect),
       target.url,
     ].join("\t"))
   }
@@ -476,7 +488,7 @@ async function runProbe(parsed, loaded, dependencies) {
     for (const result of output) {
       const detail = result.httpStatus === null
         ? result.errorCode
-        : `HTTP ${result.httpStatus}`
+        : `HTTP ${result.httpStatus}${result.errorCode ? ` (${result.errorCode})` : ""}`
       writeLine(
         dependencies.stdout,
         `${result.outcome === "success" ? "OK" : "FAIL"} ${result.targetId} ${detail}`,

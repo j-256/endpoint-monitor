@@ -53,7 +53,7 @@ function usage() {
 
 Prepare an ignored mode-0600 wrangler.jsonc and optionally store the validated target document in an existing migrated D1 database. The command never creates Cloudflare resources or installs secrets.
 
-Target documents are JSON with schemaVersion 1, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url.
+Target documents are JSON with schemaVersion 1 or 2, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url.
 
 Required options:
   -c, --config <path>              Target document

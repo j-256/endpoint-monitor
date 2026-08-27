@@ -6,20 +6,44 @@
     "recoveryThreshold": 2,
     "timeoutMilliseconds": 10000
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "targets": [
     {
+      "expect": {
+        "bodyIncludes": "Example Domain",
+        "contentType": "text/html"
+      },
+      "expectedStatuses": [
+        200
+      ],
       "id": "example-home",
       "url": "https://example.com/"
     },
     {
+      "expect": {
+        "contentType": "application/json",
+        "jsonSubset": {
+          "ok": true
+        }
+      },
       "expectedStatuses": [
-        200,
-        204
+        200
       ],
       "id": "example-health",
       "method": "GET",
       "url": "https://status.example.net/health"
+    },
+    {
+      "expect": {
+        "location": {
+          "url": "https://example.org/docs?probe=1"
+        }
+      },
+      "expectedStatuses": [
+        301
+      ],
+      "id": "example-redirect",
+      "url": "https://old.example.org/docs?probe=1"
     }
   ]
 }

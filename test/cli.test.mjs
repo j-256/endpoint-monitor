@@ -229,7 +229,7 @@ test("config show and validate support active and explicit target documents", as
 test("targets lists the active document in text and JSON", async () => {
   const text = await commandOutput(["targets", "--profile", PROFILE_PATH])
   assert.equal(text.status, 0)
-  assert.match(text.stdout, /example-home\tGET\t<500\thttps:\/\/example\.com\//)
+  assert.match(text.stdout, /example-home\tGET\t<500\t-\thttps:\/\/example\.com\//)
   assert.match(text.stdout, /1 target\(s\)/)
 
   const json = await commandOutput(["targets", "-jp", PROFILE_PATH])
@@ -237,7 +237,34 @@ test("targets lists the active document in text and JSON", async () => {
   const output = JSON.parse(json.stdout)
   assert.equal(output.configPath, CONFIG_PATH)
   assert.equal(output.targets[0].id, "example-home")
+  assert.equal(output.targets[0].expect, null)
   assert.equal(output.targets[0].expectedStatuses, null)
+
+  const validatedConfiguration = JSON.stringify({
+    schemaVersion: 2,
+    targets: [{
+      expect: {
+        bodyIncludes: "ready",
+        contentType: "application/json",
+        jsonSubset: { ok: true },
+        location: { url: "https://www.example.com/" },
+      },
+      expectedStatuses: [301],
+      id: "validated",
+      url: "https://example.com/",
+    }],
+  })
+  const validated = await commandOutput(["targets", "-p", PROFILE_PATH], {
+    readFileImpl: async (filename) => filename === PROFILE_PATH
+      ? PROFILE
+      : filename === CONFIG_PATH
+        ? validatedConfiguration
+        : WRANGLER,
+  })
+  assert.match(
+    validated.stdout,
+    /body,content-type,json-subset,location/,
+  )
 })
 
 test("probe uses the active document, supports explicit documents, and reports failures", async () => {
@@ -258,6 +285,27 @@ test("probe uses the active document, supports explicit documents, and reports f
   })
   assert.equal(failure.status, 1)
   assert.equal(JSON.parse(failure.stdout).results[0].httpStatus, 526)
+
+  const validationFailure = await commandOutput([
+    "probe",
+    "targets.json",
+  ], {
+    fetchImpl: async () => new Response("not ready", { status: 200 }),
+    readFileImpl: async () => JSON.stringify({
+      schemaVersion: 2,
+      targets: [{
+        expect: { bodyIncludes: "service ready" },
+        expectedStatuses: [200],
+        id: "validated",
+        url: "https://example.com/",
+      }],
+    }),
+  })
+  assert.equal(validationFailure.status, 1)
+  assert.match(
+    validationFailure.stdout,
+    /FAIL validated HTTP 200 \(body-marker-missing\)/,
+  )
 
   const runtime = await commandOutput(["probe", "targets.json"], {
     clock: () => Number.NaN,
@@ -342,7 +390,7 @@ test("CLI reports target, profile, Wrangler, and provider preconditions distinct
     "validate",
     "targets.json",
   ], {
-    readFileImpl: async () => '{"schemaVersion":2,"targets":[]}',
+    readFileImpl: async () => '{"schemaVersion":3,"targets":[]}',
   })
   assert.equal(invalidDocument.status, 2)
   assert.match(invalidDocument.stderr, /schemaVersion/)

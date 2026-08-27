@@ -32,6 +32,7 @@ test("configuration normalization resolves defaults and canonical URLs", () => {
     timeoutMilliseconds: 10000,
   })
   assert.deepEqual(normalized.targets[0], {
+    expect: null,
     expectedStatuses: null,
     failureThreshold: 2,
     id: "example-home",
@@ -55,6 +56,7 @@ test("targets support exact expected statuses and threshold overrides", () => {
     }],
   }))
   assert.deepEqual(normalized.targets[0], {
+    expect: null,
     expectedStatuses: [200, 204],
     failureThreshold: 3,
     id: "example-health",
@@ -74,6 +76,90 @@ test("configured target fingerprints are stable and configuration-sensitive", as
   assert.match(first.configFingerprint, /^sha256:[a-f0-9]{64}$/)
   assert.equal(first.configFingerprint, same.configFingerprint)
   assert.notEqual(first.configFingerprint, changed.configFingerprint)
+
+  const [versionTwoWithoutExpectations] = await configuredTargets(configuration({
+    schemaVersion: 2,
+  }))
+  assert.equal(first.configFingerprint, versionTwoWithoutExpectations.configFingerprint)
+
+  const [validated] = await configuredTargets(configuration({
+    schemaVersion: 2,
+    targets: [{
+      expect: { contentType: "text/html" },
+      id: "example-home",
+      url: "https://example.com",
+    }],
+  }))
+  assert.notEqual(first.configFingerprint, validated.configFingerprint)
+})
+
+test("schema version 2 normalizes bounded response expectations", () => {
+  const normalized = normalizeConfiguration(configuration({
+    schemaVersion: 2,
+    targets: [{
+      expect: {
+        bodyIncludes: "service ready",
+        contentType: "Application/JSON",
+        jsonSubset: {
+          nested: { ready: true },
+          ok: true,
+          versions: [1, 2],
+        },
+      },
+      expectedStatuses: [200],
+      id: "example-health",
+      url: "https://status.example.net/health",
+    }, {
+      expect: {
+        location: {
+          url: "https://www.example.net/path?probe=1",
+        },
+      },
+      expectedStatuses: [301],
+      id: "example-redirect",
+      url: "https://old.example.net/path?probe=1",
+    }],
+  }))
+  assert.deepEqual(normalized.targets[0].expect, {
+    bodyIncludes: "service ready",
+    contentType: "application/json",
+    jsonSubset: {
+      nested: { ready: true },
+      ok: true,
+      versions: [1, 2],
+    },
+  })
+  assert.deepEqual(normalized.targets[1].expect, {
+    location: {
+      ignoreQuery: false,
+      url: "https://www.example.net/path?probe=1",
+    },
+  })
+})
+
+test("portable schema version 2 retains normalized expectations", () => {
+  const portable = portableConfiguration(configuration({
+    schemaVersion: 2,
+    targets: [{
+      expect: {
+        contentType: "Text/HTML",
+        location: {
+          ignoreQuery: true,
+          url: "https://www.example.net/",
+        },
+      },
+      expectedStatuses: [307],
+      id: "example-redirect",
+      url: "https://old.example.net/",
+    }],
+  }))
+  assert.deepEqual(portable.targets[0].expect, {
+    contentType: "text/html",
+    location: {
+      ignoreQuery: true,
+      url: "https://www.example.net/",
+    },
+  })
 })
 
 test("portable configuration contains no frozen implementation metadata", () => {
@@ -140,6 +226,52 @@ test("configuration rejects ambiguous or unsafe target values", () => {
   ]) {
     assert.throws(() => normalizeConfiguration(configuration({ targets: [target] })))
   }
+})
+
+test("configuration rejects unsafe or contradictory response expectations", () => {
+  const invalidTargets = [
+    { expect: {}, id: "empty", url: "https://example.com/" },
+    { expect: { bodyIncludes: " " }, id: "body", url: "https://example.com/" },
+    { expect: { contentType: "text/html; charset=utf-8" }, id: "type", url: "https://example.com/" },
+    { expect: { jsonSubset: {} }, id: "json", url: "https://example.com/" },
+    { expect: { jsonSubset: { invalid: undefined } }, id: "json-value", url: "https://example.com/" },
+    { expect: { bodyIncludes: "text" }, id: "head", method: "HEAD", url: "https://example.com/" },
+    {
+      expect: { location: { url: "https://www.example.com/" } },
+      expectedStatuses: [200],
+      id: "location-status",
+      url: "https://example.com/",
+    },
+    {
+      expect: { location: { ignoreQuery: "yes", url: "https://www.example.com/" } },
+      expectedStatuses: [301],
+      id: "location-query",
+      url: "https://example.com/",
+    },
+    {
+      expect: { location: { url: "https://user:pass@www.example.com/" } },
+      expectedStatuses: [301],
+      id: "location-url",
+      url: "https://example.com/",
+    },
+  ]
+  for (const target of invalidTargets) {
+    assert.throws(() => normalizeConfiguration(configuration({
+      schemaVersion: 2,
+      targets: [target],
+    })))
+  }
+  assert.throws(() => normalizeConfiguration(configuration({
+    schemaVersion: 1,
+    targets: [{
+      expect: { contentType: "text/html" },
+      id: "legacy",
+      url: "https://example.com/",
+    }],
+  })), /unsupported field/)
+  assert.throws(() => normalizeConfiguration(configuration({
+    schemaVersion: 3,
+  })), /schemaVersion/)
 })
 
 test("configuration accepts an empty explicit target list", () => {
