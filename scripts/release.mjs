@@ -37,6 +37,7 @@ const REQUIRED_ARCHIVE_FILES = Object.freeze([
   "docs/cloudflare.md",
   "endpoint-monitor.example.json",
   "migrations/0001_initial.sql",
+  "migrations/0002_incident_triage.sql",
   "package.json",
   "scripts/configure-cloudflare.mjs",
   "src/adapters/cloudflare/worker.mjs",

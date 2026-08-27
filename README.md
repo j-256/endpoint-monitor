@@ -152,6 +152,18 @@ endpoint-monitor config sync
 
 `config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
 
+Apply every packaged migration before using incident triage commands. The CLI reads the D1 binding from the same operator profile and authenticates directly to Cloudflare with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`:
+
+```sh
+endpoint-monitor incidents list
+endpoint-monitor incidents show <incident-id>
+endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
+endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z -n "Maintenance window"
+endpoint-monitor incidents dismiss <incident-id> -n "False positive"
+```
+
+`incidents list` shows open incidents by default; add `-a, --all` for resolved history and `-l, --limit` to bound the result. Acknowledgement records review without changing health or delivery. Snooze delays an undelivered problem transition until its future RFC 3339 deadline but does not stop probes or retract an event already sent. Dismissal records an audited `operator-dismissed` resolution, clears exceptional state, and emits a resolved transition only when a corresponding problem transition exists. If the target is still failing, it can reopen after its configured threshold; remove or correct the target instead when the monitoring contract itself is obsolete. Operator notes are stored in D1, so keep credentials and private response content out of them.
+
 Install only the secrets required by selected features through concealed Wrangler input:
 
 ```sh
@@ -174,7 +186,7 @@ The target document is stored in D1 rather than an environment variable because 
 
 ## Storage behavior
 
-Every enabled invocation reads one configuration row and the small exceptional-state set. A healthy target with no candidate or incident causes no D1 write. Repeated failures for an already-open incident also cause no write. D1 changes are limited to configuration changes, failure or recovery candidates, incident transitions, unique provider signals, delivery attempts, suppression after configuration changes, and periodic retention cleanup.
+Every enabled invocation reads one configuration row and the small exceptional-state set. A healthy target with no candidate or incident causes no D1 write. Repeated failures for an already-open incident also cause no write. D1 changes are limited to configuration changes, failure or recovery candidates, incident transitions, explicit operator triage actions, unique provider signals, delivery attempts, suppression after configuration changes, and periodic retention cleanup.
 
 At one Cron invocation per minute, the Worker receives 1,440 scheduled invocations per day regardless of target count. The actual probe total is controlled by the target interval. Workers Observability carries invocation health, CPU time, wall time, subrequest count, and compact run summaries without turning routine success into D1 history.
 
@@ -185,11 +197,11 @@ Delivery uses structured CloudEvents 1.0 with source `urn:endpoint-monitor` and 
 - `urn:endpoint-monitor:problem:v1`
 - `urn:endpoint-monitor:recovered:v1`
 
-The exact serialized body is signed as `X-Hookrelay-Signature-256: sha256=<hex>` using HMAC-SHA256. An outbox retries failed delivery with bounded exponential backoff. Incidents opened while delivery is disabled are bridged into the outbox when delivery is enabled, so shadow mode does not lose an ongoing problem.
+The exact serialized body is signed as `X-Hookrelay-Signature-256: sha256=<hex>` using HMAC-SHA256. An outbox retries failed delivery with bounded exponential backoff and holds a resolved transition until its corresponding problem transition has been delivered. Incidents opened while delivery is disabled are bridged into the outbox when delivery is enabled, so shadow mode does not lose an ongoing problem. Operator-dismissed incidents use the recovered event type with `resolutionReason: "operator-dismissed"` so downstream consumers can close the existing problem without mistaking the action for a successful probe.
 
 ## HTTP and diagnostics
 
-`GET /healthz` returns only service liveness. `/api/status` is hidden unless status is enabled and requires `Authorization: Bearer <ENDPOINT_MONITOR_STATUS_TOKEN>`. Its protected response includes target URLs, schedule capacity, exceptional states, incidents, and delivery backlog.
+`GET /healthz` returns only service liveness. `/api/status` is hidden unless status is enabled and requires `Authorization: Bearer <ENDPOINT_MONITOR_STATUS_TOKEN>`. Its protected response includes target URLs, schedule capacity, exceptional states, incidents, acknowledgement and snooze summaries, and delivery backlog. Incident mutation remains available only through the operator CLI.
 
 Custom logs contain fixed event names, target IDs, statuses, bounded error codes, counts, and incident IDs. They exclude URLs, query strings, response headers, exception messages, Hookrelay paths, signatures, HMACs, API response bodies, and secret values.
 

@@ -69,7 +69,7 @@ Options:
   -l, --delivery                   Enable Hookrelay delivery
   -t, --status                     Enable authenticated status output
   -n, --dry-run                    Validate and print the plan without writes
-      --apply-config               Upsert configuration into D1
+  -i, --apply-config               Upsert configuration into D1
   -h, --help                       Show this help
 
 Environment required by --analytics or --apply-config:
@@ -144,6 +144,7 @@ export function parseConfigureArguments(argv) {
     ["a", "analytics"],
     ["e", "enabled"],
     ["h", "help"],
+    ["i", "applyConfig"],
     ["l", "delivery"],
     ["n", "dryRun"],
     ["t", "status"],

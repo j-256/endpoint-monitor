@@ -20,6 +20,22 @@ const READ_CONFIGURATION_SQL = `
   FROM monitor_configuration
   WHERE singleton_id = 1
 `
+export const INCIDENT_TRIAGE_FIELDS_SQL = `
+  (SELECT MIN(action.created_at)
+    FROM monitor_incident_action AS action
+    WHERE action.incident_id = monitor_incident.id
+      AND action.action = 'acknowledged') AS acknowledged_at,
+  (SELECT MAX(action.snoozed_until)
+    FROM monitor_incident_action AS action
+    WHERE action.incident_id = monitor_incident.id
+      AND action.action = 'snoozed') AS snoozed_until,
+  EXISTS (
+    SELECT 1
+    FROM monitor_incident_action AS action
+    WHERE action.incident_id = monitor_incident.id
+      AND action.action = 'dismissed'
+  ) AS operator_dismissed
+`
 const UPSERT_TARGET_STATE_SQL = `
   INSERT INTO monitor_target_state (
     target_id,
@@ -114,10 +130,21 @@ const INSERT_SIGNAL_SQL = `
   ) VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 const READ_DUE_OUTBOX_SQL = `
-  SELECT id, event_json, attempts
-  FROM monitor_outbox
-  WHERE delivered_at IS NULL AND next_attempt_at <= ?
-  ORDER BY created_at, id
+  SELECT candidate.id, candidate.event_json, candidate.attempts
+  FROM monitor_outbox AS candidate
+  WHERE candidate.delivered_at IS NULL
+    AND candidate.next_attempt_at <= ?
+    AND (
+      candidate.transition = 'opened'
+      OR EXISTS (
+        SELECT 1
+        FROM monitor_outbox AS opened
+        WHERE opened.incident_id = candidate.incident_id
+          AND opened.transition = 'opened'
+          AND opened.delivered_at IS NOT NULL
+      )
+    )
+  ORDER BY candidate.created_at, candidate.id
   LIMIT ?
 `
 const DELIVER_OUTBOX_SQL = `
@@ -139,13 +166,13 @@ const FAIL_OUTBOX_SQL = `
   WHERE id = ? AND delivered_at IS NULL
 `
 const READ_OPEN_INCIDENTS_SQL = `
-  SELECT *
+  SELECT monitor_incident.*, ${INCIDENT_TRIAGE_FIELDS_SQL}
   FROM monitor_incident
   WHERE status = 'open'
   ORDER BY opened_at DESC
 `
 const READ_OPEN_INCIDENTS_WITHOUT_OUTBOX_SQL = `
-  SELECT monitor_incident.*
+  SELECT monitor_incident.*, ${INCIDENT_TRIAGE_FIELDS_SQL}
   FROM monitor_incident
   LEFT JOIN monitor_outbox
     ON monitor_outbox.incident_id = monitor_incident.id
@@ -155,7 +182,7 @@ const READ_OPEN_INCIDENTS_WITHOUT_OUTBOX_SQL = `
   ORDER BY monitor_incident.opened_at, monitor_incident.id
 `
 const READ_RECENT_INCIDENTS_SQL = `
-  SELECT *
+  SELECT monitor_incident.*, ${INCIDENT_TRIAGE_FIELDS_SQL}
   FROM monitor_incident
   ORDER BY opened_at DESC
   LIMIT ?
@@ -214,9 +241,11 @@ function stateFromRow(row) {
   })
 }
 
-function incidentFromRow(row) {
+export function incidentFromRow(row) {
   if (!row) return null
+  const operatorDismissed = Number(row.operator_dismissed || 0) === 1
   return Object.freeze({
+    acknowledgedAt: row.acknowledged_at || null,
     configFingerprint: row.config_fingerprint,
     errorCode: row.error_code,
     failureKind: row.failure_kind,
@@ -230,8 +259,10 @@ function incidentFromRow(row) {
     openedAt: row.opened_at,
     recoveryThreshold: Number(row.recovery_threshold),
     requestCount: row.request_count === null ? null : Number(row.request_count),
-    resolutionReason: row.resolution_reason,
+    resolutionReason: row.resolution_reason
+      || (operatorDismissed ? RESOLUTION_REASON.OPERATOR_DISMISSED : null),
     resolvedAt: row.resolved_at,
+    snoozedUntil: row.snoozed_until || null,
     status: row.status,
     targetId: row.target_id,
     targetUrl: row.target_url,
@@ -291,13 +322,18 @@ function incidentUpdateStatement(db, incident) {
 
 function outboxInsertStatement(db, incident, transition, createdAt) {
   const event = createIncidentCloudEvent(incident, transition)
+  const nextAttemptAt = transition === TRANSITION.OPENED
+    && Number.isFinite(Date.parse(incident.snoozedUntil))
+    && Date.parse(incident.snoozedUntil) > Date.parse(createdAt)
+    ? incident.snoozedUntil
+    : createdAt
   return db.prepare(INSERT_OUTBOX_SQL).bind(
     event.id,
     incident.id,
     transition,
     JSON.stringify(event),
     createdAt,
-    createdAt,
+    nextAttemptAt,
   )
 }
 

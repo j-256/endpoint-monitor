@@ -98,6 +98,12 @@ test("CLI help covers every route and supports equivalent spellings", async () =
     [["help", "config", "show"], ["config", "show", "--help"]],
     [["help", "config", "validate"], ["config", "validate", "--help"]],
     [["help", "config", "sync"], ["config", "sync", "--help"]],
+    [["help", "incidents"], ["incidents", "--help"]],
+    [["help", "incidents", "list"], ["incidents", "list", "--help"]],
+    [["help", "incidents", "show"], ["incidents", "show", "--help"]],
+    [["help", "incidents", "acknowledge"], ["incidents", "acknowledge", "--help"]],
+    [["help", "incidents", "snooze"], ["incidents", "snooze", "--help"]],
+    [["help", "incidents", "dismiss"], ["incidents", "dismiss", "--help"]],
     [["help", "targets"], ["targets", "--help"]],
     [["help", "probe"], ["probe", "--help"]],
     [["help", "cloudflare"], ["cloudflare", "--help"]],
@@ -112,6 +118,32 @@ test("CLI help covers every route and supports equivalent spellings", async () =
     assert.equal(right.stderr, "")
     assert.equal(left.stdout, right.stdout)
     assert.match(left.stdout, /^Usage: endpoint-monitor/)
+  }
+})
+
+test("CLI help gives every long option a short equivalent", () => {
+  const routes = [
+    [],
+    ["config", "path"],
+    ["config", "show"],
+    ["config", "validate"],
+    ["config", "sync"],
+    ["incidents", "list"],
+    ["incidents", "show"],
+    ["incidents", "acknowledge"],
+    ["incidents", "snooze"],
+    ["incidents", "dismiss"],
+    ["targets"],
+    ["probe"],
+    ["cloudflare", "configure"],
+  ]
+  for (const route of routes) {
+    const declarations = help(route).split("\n").filter((line) => (
+      /^\s+(?:-[a-z],\s+)?--[a-z]/.test(line)
+    ))
+    for (const declaration of declarations) {
+      assert.match(declaration, /^\s+-[a-z],\s+--[a-z]/, route.join(" "))
+    }
   }
 })
 
@@ -149,6 +181,30 @@ test("CLI parser supports option forms, interleaving, and explicit documents", (
   ])
   assert.equal(cloudflare.command, "cloudflare.configure")
   assert.deepEqual(cloudflare.commandArguments, ["--config=targets.json"])
+
+  const incidents = parseCliArguments([
+    "-ajp/private/profile.json",
+    "-l5",
+    "incidents",
+    "list",
+  ])
+  assert.equal(incidents.command, "incidents.list")
+  assert.equal(incidents.options.all, true)
+  assert.equal(incidents.options.json, true)
+  assert.equal(incidents.options.limit, 5)
+  assert.equal(incidents.options.profilePath, "/private/profile.json")
+
+  const snooze = parseCliArguments([
+    "incidents",
+    "snooze",
+    "incident-one",
+    "--until=2026-08-28T03:00:00Z",
+    "--note",
+    "Maintenance",
+  ])
+  assert.equal(snooze.command, "incidents.snooze")
+  assert.equal(snooze.options.note, "Maintenance")
+  assert.equal(snooze.options.until, "2026-08-28T03:00:00Z")
 })
 
 test("CLI rejects removed commands, unknown routes, and command-specific options", async () => {
@@ -159,6 +215,11 @@ test("CLI rejects removed commands, unknown routes, and command-specific options
     ["targets", "path"],
     ["targets", "probe"],
     ["config"],
+    ["incidents"],
+    ["incidents", "missing"],
+    ["incidents", "show"],
+    ["incidents", "list", "--limit=101"],
+    ["incidents", "snooze", "incident-one"],
     ["config", "missing"],
     ["config", "path", "extra"],
     ["config", "show", "--json", "targets.json"],

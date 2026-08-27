@@ -21,6 +21,12 @@ export const IMMEDIATE_HTTP_STATUSES = Object.freeze([
   530,
 ])
 
+export const INCIDENT_ACTION = Object.freeze({
+  ACKNOWLEDGED: "acknowledged",
+  DISMISSED: "dismissed",
+  SNOOZED: "snoozed",
+})
+
 export const EVENT_SOURCE = "urn:endpoint-monitor"
 
 export const EVENT_TYPE = Object.freeze({
@@ -46,6 +52,7 @@ export const OBSERVATION_SOURCE = Object.freeze({
 export const RESOLUTION_REASON = Object.freeze({
   CONFIGURATION_CHANGED: "configuration-changed",
   CONFIGURATION_REMOVED: "configuration-removed",
+  OPERATOR_DISMISSED: "operator-dismissed",
   RECOVERED: "recovered",
 })
 

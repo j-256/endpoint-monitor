@@ -1,4 +1,5 @@
 const API_BASE_URL = "https://api.cloudflare.com/client/v4/"
+const DATABASE_ID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 const GRAPHQL_URL = `${API_BASE_URL}graphql`
 
 function fixedApiError(code, status = null) {
@@ -79,5 +80,35 @@ export class CloudflareApi {
       throw fixedApiError("cloudflare-graphql-invalid", response.status)
     }
     return payload.data
+  }
+
+  async queryD1(databaseId, query) {
+    if (!DATABASE_ID_PATTERN.test(databaseId || "")
+      || !query
+      || typeof query !== "object"
+      || Array.isArray(query)) {
+      throw new TypeError("Cloudflare D1 query configuration is invalid")
+    }
+    const url = new URL(
+      `accounts/${this.accountId}/d1/database/${databaseId}/query`,
+      API_BASE_URL,
+    )
+    let response
+    try {
+      response = await this.fetchImpl(url, {
+        body: JSON.stringify(query),
+        headers: this.headers(),
+        method: "POST",
+      })
+    } catch {
+      throw fixedApiError("cloudflare-d1-failed")
+    }
+    const payload = await jsonResponse(response, "cloudflare-d1-failed")
+    if (payload.success !== true
+      || !Array.isArray(payload.result)
+      || payload.result.some((entry) => entry?.success !== true)) {
+      throw fixedApiError("cloudflare-d1-invalid", response.status)
+    }
+    return payload.result
   }
 }

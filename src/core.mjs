@@ -224,6 +224,18 @@ export function resolveIncident(incident, resolvedAt) {
   })
 }
 
+export function dismissIncident(incident, dismissedAt) {
+  if (incident?.status !== "open") {
+    throw new TypeError("Only an open incident can be dismissed")
+  }
+  return Object.freeze({
+    ...incident,
+    resolutionReason: RESOLUTION_REASON.OPERATOR_DISMISSED,
+    resolvedAt: timestamp(dismissedAt, "Incident dismissal time"),
+    status: "resolved",
+  })
+}
+
 export function suppressIncident(incident, resolvedAt, reason) {
   if (incident?.status !== "open"
     || ![
@@ -254,6 +266,8 @@ export function createIncidentCloudEvent(incident, transition) {
     throw new TypeError("Incident event transition is invalid")
   }
   const opened = transition === TRANSITION.OPENED
+  const dismissed = !opened
+    && incident.resolutionReason === RESOLUTION_REASON.OPERATOR_DISMISSED
   const eventTime = opened ? incident.openedAt : incident.resolvedAt
   if (!eventTime) throw new TypeError("Incident transition time is unavailable")
   return Object.freeze({
@@ -270,6 +284,7 @@ export function createIncidentCloudEvent(incident, transition) {
       openedAt: incident.openedAt,
       recoveryThreshold: incident.recoveryThreshold,
       requestCount: incident.requestCount,
+      resolutionReason: incident.resolutionReason,
       resolvedAt: incident.resolvedAt,
       schemaVersion: 1,
       state: opened ? "problem" : "recovered",
@@ -284,7 +299,9 @@ export function createIncidentCloudEvent(incident, transition) {
     time: eventTime,
     title: opened
       ? `${incident.targetId} returned ${failureLabel(incident)}`
-      : `${incident.targetId} recovered from ${failureLabel(incident)}`,
+      : dismissed
+        ? `${incident.targetId} incident dismissed after ${failureLabel(incident)}`
+        : `${incident.targetId} recovered from ${failureLabel(incident)}`,
     type: opened ? EVENT_TYPE.PROBLEM : EVENT_TYPE.RECOVERED,
     url: incident.targetUrl,
   })

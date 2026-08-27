@@ -73,7 +73,7 @@ test("Cloudflare configurator help documents mutations and required environment"
 
 test("Cloudflare configurator parser supports option forms and bundles", () => {
   const parsed = parseConfigureArguments([
-    "-aelt",
+    "-aeilt",
     "-ctargets.json",
     `--database-id=${DATABASE_ID}`,
     "--hookrelay-service",
@@ -84,6 +84,7 @@ test("Cloudflare configurator parser supports option forms and bundles", () => {
   assert.equal(parsed.analytics, true)
   assert.equal(parsed.delivery, true)
   assert.equal(parsed.enabled, true)
+  assert.equal(parsed.applyConfig, true)
   assert.equal(parsed.status, true)
   assert.equal(parsed.configPath, "targets.json")
   assert.equal(parsed.databaseId, DATABASE_ID)

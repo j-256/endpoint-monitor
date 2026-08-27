@@ -4,7 +4,7 @@
 
 One Worker and one D1 database are required. A Hookrelay service binding is optional. The Worker does not need KV, Queues, Durable Objects, or Analytics Engine.
 
-The generated `wrangler.jsonc` is operator-specific and ignored. It contains resource identifiers and feature flags but no secrets or targets. `endpoint-monitor cloudflare configure` also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile that remembers the target-document and Wrangler-configuration paths. `endpoint-monitor config path`, `endpoint-monitor targets`, `endpoint-monitor probe`, and `endpoint-monitor config sync` read that profile so routine operations do not require a target path or D1 identifier. The target document is validated locally and stored as one fingerprinted D1 control row. Reapplying an unchanged document writes nothing, and target-only changes do not require a Worker deployment.
+The generated `wrangler.jsonc` is operator-specific and ignored. It contains resource identifiers and feature flags but no secrets or targets. `endpoint-monitor cloudflare configure` also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile that remembers the target-document and Wrangler-configuration paths. Configuration, target, probe, and incident commands read that profile so routine operations do not require a target path or D1 identifier. The target document is validated locally and stored as one fingerprinted D1 control row. Reapplying an unchanged document writes nothing, and target-only changes do not require a Worker deployment.
 
 ## Feature bindings
 
@@ -54,6 +54,24 @@ Use the Worker name as the primary Observability filter, then filter the structu
 
 The protected status API is the preferred operational view. For direct database inspection, query only the narrow tables needed and avoid selecting `config_json`, `target_url`, or `event_json` into shared logs.
 
+The operator CLI provides the authenticated incident view without enabling protected HTTP status:
+
+```sh
+endpoint-monitor incidents list
+endpoint-monitor incidents list -a -l 50
+endpoint-monitor incidents show <incident-id>
+```
+
+Mutations require D1 write permission. Acknowledge records review, snooze delays only a pending problem transition, and dismiss resolves while leaving a persistent failure eligible to reopen:
+
+```sh
+endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
+endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z
+endpoint-monitor incidents dismiss <incident-id> -n "False positive"
+```
+
+Every long CLI option has a short equivalent. Use `endpoint-monitor help incidents <command>` for complete forms, environment requirements, and exit statuses. Do not store credentials or private response content in triage notes.
+
 Useful safe counts include:
 
 ```sql
@@ -62,7 +80,7 @@ SELECT COUNT(*) AS open_incidents FROM monitor_incident WHERE status = 'open';
 SELECT COUNT(*) AS pending_deliveries FROM monitor_outbox WHERE delivered_at IS NULL;
 ```
 
-Do not use a per-probe history table. Routine health belongs in Workers Observability, while D1 retains only the state needed for thresholds, incidents, deduplication, and retry.
+Do not use a per-probe history table. Routine health belongs in Workers Observability, while D1 retains only the state needed for thresholds, incidents, immutable operator actions, deduplication, and retry.
 
 ## Analytics behavior
 

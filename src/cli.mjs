@@ -19,6 +19,11 @@ import {
   monitorDatabaseId,
 } from "./operator.mjs"
 import { probeTargets, summarizeProbeResults } from "./probe.mjs"
+import {
+  CloudflareIncidentOperator,
+  INCIDENT_LIST_LIMIT,
+} from "./adapters/cloudflare/operator-incidents.mjs"
+import { INCIDENT_ACTION } from "./constants.mjs"
 
 const EXIT = Object.freeze({
   MISSING_DEPENDENCY: 3,
@@ -33,6 +38,11 @@ const COMMAND = Object.freeze({
   CONFIG_SHOW: "config.show",
   CONFIG_SYNC: "config.sync",
   CONFIG_VALIDATE: "config.validate",
+  INCIDENTS_ACKNOWLEDGE: "incidents.acknowledge",
+  INCIDENTS_DISMISS: "incidents.dismiss",
+  INCIDENTS_LIST: "incidents.list",
+  INCIDENTS_SHOW: "incidents.show",
+  INCIDENTS_SNOOZE: "incidents.snooze",
   PROBE: "probe",
   TARGETS: "targets",
 })
@@ -42,6 +52,15 @@ const CONFIG_COMMANDS = new Map([
   ["sync", COMMAND.CONFIG_SYNC],
   ["validate", COMMAND.CONFIG_VALIDATE],
 ])
+const INCIDENT_COMMANDS = new Map([
+  ["acknowledge", COMMAND.INCIDENTS_ACKNOWLEDGE],
+  ["dismiss", COMMAND.INCIDENTS_DISMISS],
+  ["list", COMMAND.INCIDENTS_LIST],
+  ["show", COMMAND.INCIDENTS_SHOW],
+  ["snooze", COMMAND.INCIDENTS_SNOOZE],
+])
+const INCIDENT_COMMAND_SET = new Set(INCIDENT_COMMANDS.values())
+const INCIDENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/
 const HELP_ROUTES = new Set([
   "",
   "cloudflare",
@@ -51,6 +70,12 @@ const HELP_ROUTES = new Set([
   "config show",
   "config sync",
   "config validate",
+  "incidents",
+  "incidents acknowledge",
+  "incidents dismiss",
+  "incidents list",
+  "incidents show",
+  "incidents snooze",
   "probe",
   "targets",
 ])
@@ -58,6 +83,11 @@ const JSON_COMMANDS = new Set([
   COMMAND.CONFIG_PATH,
   COMMAND.CONFIG_SYNC,
   COMMAND.CONFIG_VALIDATE,
+  COMMAND.INCIDENTS_ACKNOWLEDGE,
+  COMMAND.INCIDENTS_DISMISS,
+  COMMAND.INCIDENTS_LIST,
+  COMMAND.INCIDENTS_SHOW,
+  COMMAND.INCIDENTS_SNOOZE,
   COMMAND.PROBE,
   COMMAND.TARGETS,
 ])
@@ -67,11 +97,22 @@ const PROFILE_COMMANDS = new Set([
   COMMAND.CONFIG_SHOW,
   COMMAND.CONFIG_SYNC,
   COMMAND.CONFIG_VALIDATE,
+  COMMAND.INCIDENTS_ACKNOWLEDGE,
+  COMMAND.INCIDENTS_DISMISS,
+  COMMAND.INCIDENTS_LIST,
+  COMMAND.INCIDENTS_SHOW,
+  COMMAND.INCIDENTS_SNOOZE,
   COMMAND.PROBE,
   COMMAND.TARGETS,
 ])
 const OPERATOR_PROFILE_HELP = "The mode-0600 operator profile is created by endpoint-monitor cloudflare configure and names the active target document and generated Wrangler configuration."
 const TARGET_DOCUMENT_HELP = "Target documents are JSON with schemaVersion 1 or 2, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url."
+const INCIDENT_READ_ENVIRONMENT_HELP = `Environment:
+  CLOUDFLARE_ACCOUNT_ID  32-character account identifier
+  CLOUDFLARE_API_TOKEN   Token with D1 read access`
+const INCIDENT_WRITE_ENVIRONMENT_HELP = `Environment:
+  CLOUDFLARE_ACCOUNT_ID  32-character account identifier
+  CLOUDFLARE_API_TOKEN   Token with D1 write access`
 
 class CliError extends Error {
   constructor(message, exitCode = EXIT.USAGE) {
@@ -184,6 +225,92 @@ Exit status:
   2  Usage, file, or configuration error
   3  Required dependency unavailable
 `
+  if (key === "incidents") return `Usage: endpoint-monitor incidents <command> [options]
+
+View and triage incidents in the D1 database identified by the local operator profile.
+
+${OPERATOR_PROFILE_HELP}
+
+Commands:
+  list         List open or recent incidents
+  show         Show one incident and its triage history
+  acknowledge  Record that an open incident was reviewed
+  snooze       Delay a pending problem delivery
+  dismiss      Resolve an incident and clear its exceptional state
+
+Run endpoint-monitor help incidents <command> for command options.
+`
+  if (key === "incidents list") return `Usage: endpoint-monitor incidents list [--all] [--limit <count>] [--json] [--profile <path>]
+
+List open incidents by default. Include resolved incident history with --all.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -a, --all             Include resolved incidents
+  -l, --limit <count>   Return 1 through ${INCIDENT_LIST_LIMIT.maximum} incidents (default: ${INCIDENT_LIST_LIMIT.default})
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_READ_ENVIRONMENT_HELP}
+`
+  if (key === "incidents show") return `Usage: endpoint-monitor incidents show <incident-id> [--json] [--profile <path>]
+
+Show one incident and its ordered acknowledgement, snooze, and dismissal history.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_READ_ENVIRONMENT_HELP}
+`
+  if (key === "incidents acknowledge") return `Usage: endpoint-monitor incidents acknowledge <incident-id> [--note <text>] [--json] [--profile <path>]
+
+Record that an open incident was reviewed without changing health or delivery state.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -n, --note <text>     Optional bounded operator note
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_WRITE_ENVIRONMENT_HELP}
+`
+  if (key === "incidents snooze") return `Usage: endpoint-monitor incidents snooze <incident-id> --until <timestamp> [--note <text>] [--json] [--profile <path>]
+
+Record a snooze and delay an undelivered problem transition until a future RFC 3339 timestamp. Probes and already-delivered transitions are unaffected.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -u, --until <timestamp>  Future RFC 3339 snooze deadline
+  -n, --note <text>        Optional bounded operator note
+  -j, --json               Write machine-readable output
+  -p, --profile <path>     Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help               Show this help
+
+${INCIDENT_WRITE_ENVIRONMENT_HELP}
+`
+  if (key === "incidents dismiss") return `Usage: endpoint-monitor incidents dismiss <incident-id> [--note <text>] [--json] [--profile <path>]
+
+Resolve an open incident as operator-dismissed and clear its exceptional target state. A continuing failure can reopen after its normal threshold.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -n, --note <text>     Optional bounded operator note
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_WRITE_ENVIRONMENT_HELP}
+`
   if (key === "cloudflare") return `Usage: endpoint-monitor cloudflare <command> [options]
 
 Prepare and operate the Cloudflare adapter.
@@ -204,6 +331,7 @@ ${OPERATOR_PROFILE_HELP}
 
 Commands:
   config <command>       Inspect, validate, or synchronize the target document
+  incidents <command>    View or triage durable incidents
   targets                List the active configured targets
   probe [<file>]         Probe the active or supplied target document once
   cloudflare configure   Prepare the Cloudflare adapter
@@ -242,6 +370,7 @@ function helpRoute(positionals) {
   if (requested.length === 0) route = []
   else if (requested[0] === "config") route = requested.slice(0, 2)
   else if (requested[0] === "cloudflare") route = requested.slice(0, 2)
+  else if (requested[0] === "incidents") route = requested.slice(0, 2)
   else route = requested.slice(0, 1)
   const key = route.join(" ")
   if (!HELP_ROUTES.has(key)) {
@@ -275,6 +404,26 @@ function commandFromPositionals(positionals) {
     }
     return { command: COMMAND.TARGETS, configPath: null }
   }
+  if (positionals[0] === "incidents") {
+    if (positionals.length === 1) throw new CliError("incidents requires a subcommand")
+    if (!INCIDENT_COMMANDS.has(positionals[1])) {
+      throw new CliError(`Unknown command: incidents ${positionals[1]}`)
+    }
+    const command = INCIDENT_COMMANDS.get(positionals[1])
+    const needsId = command !== COMMAND.INCIDENTS_LIST
+    const maximumPositionals = needsId ? 3 : 2
+    if (positionals.length > maximumPositionals) {
+      throw new CliError(`Unexpected argument: ${positionals[maximumPositionals]}`)
+    }
+    const incidentId = positionals[2] ?? null
+    if (needsId && !incidentId) {
+      throw new CliError(`incidents ${positionals[1]} requires an incident ID`)
+    }
+    if (incidentId && !INCIDENT_ID_PATTERN.test(incidentId)) {
+      throw new CliError("Incident ID is invalid")
+    }
+    return { command, configPath: null, incidentId }
+  }
   if (positionals[0] === "probe") {
     if (positionals.length > 2) {
       throw new CliError(`Unexpected argument: ${positionals[2]}`)
@@ -301,6 +450,25 @@ function validateOptions(command, configPath, options, provided) {
   if (provided.has("concurrency") && command !== COMMAND.PROBE) {
     throw new CliError("--concurrency is valid only with probe")
   }
+  if (provided.has("all") && command !== COMMAND.INCIDENTS_LIST) {
+    throw new CliError("--all is valid only with incidents list")
+  }
+  if (provided.has("limit") && command !== COMMAND.INCIDENTS_LIST) {
+    throw new CliError("--limit is valid only with incidents list")
+  }
+  if (provided.has("note") && ![
+    COMMAND.INCIDENTS_ACKNOWLEDGE,
+    COMMAND.INCIDENTS_DISMISS,
+    COMMAND.INCIDENTS_SNOOZE,
+  ].includes(command)) {
+    throw new CliError("--note is valid only with incident triage mutations")
+  }
+  if (provided.has("until") && command !== COMMAND.INCIDENTS_SNOOZE) {
+    throw new CliError("--until is valid only with incidents snooze")
+  }
+  if (command === COMMAND.INCIDENTS_SNOOZE && !provided.has("until")) {
+    throw new CliError("--until is required with incidents snooze")
+  }
   if (configPath && provided.has("profile")) {
     throw new CliError("--profile cannot be combined with an explicit target document")
   }
@@ -309,6 +477,13 @@ function validateOptions(command, configPath, options, provided) {
     || options.concurrency > MAXIMUM_CLI_CONCURRENCY) {
     throw new CliError(
       `Concurrency must be an integer from 1 through ${MAXIMUM_CLI_CONCURRENCY}`,
+    )
+  }
+  if (!Number.isInteger(options.limit)
+    || options.limit < INCIDENT_LIST_LIMIT.minimum
+    || options.limit > INCIDENT_LIST_LIMIT.maximum) {
+    throw new CliError(
+      `Limit must be an integer from ${INCIDENT_LIST_LIMIT.minimum} through ${INCIDENT_LIST_LIMIT.maximum}`,
     )
   }
 }
@@ -324,10 +499,14 @@ export function parseCliArguments(argv) {
     })
   }
   const options = {
+    all: false,
     concurrency: 5,
     help: false,
     json: false,
+    limit: INCIDENT_LIST_LIMIT.default,
+    note: null,
     profilePath: DEFAULT_PROFILE_PATH,
+    until: null,
   }
   const positionals = []
   const provided = new Set()
@@ -346,17 +525,24 @@ export function parseCliArguments(argv) {
       const equals = argument.indexOf("=")
       const name = equals === -1 ? argument : argument.slice(0, equals)
       const attached = equals === -1 ? null : argument.slice(equals + 1)
-      if (name === "--help" || name === "--json") {
+      if (name === "--all" || name === "--help" || name === "--json") {
         if (attached !== null) throw new CliError(`${name} does not take a value`)
         const option = name.slice(2)
         options[option] = true
         provided.add(option)
-      } else if (name === "--concurrency" || name === "--profile") {
+      } else if ([
+        "--concurrency",
+        "--limit",
+        "--note",
+        "--profile",
+        "--until",
+      ].includes(name)) {
         const parsed = optionValue(argv, index, attached, name)
         const option = name.slice(2)
         options[option === "profile" ? "profilePath" : option] = option === "concurrency"
-          ? Number(parsed.value)
-          : parsed.value
+          || option === "limit"
+            ? Number(parsed.value)
+            : parsed.value
         provided.add(option)
         index = parsed.index
       } else {
@@ -368,16 +554,23 @@ export function parseCliArguments(argv) {
     while (bundle) {
       const name = bundle[0]
       bundle = bundle.slice(1)
-      if (name === "h" || name === "j") {
-        const option = name === "h" ? "help" : "json"
+      if (name === "a" || name === "h" || name === "j") {
+        const option = name === "a" ? "all" : name === "h" ? "help" : "json"
         options[option] = true
         provided.add(option)
-      } else if (name === "c" || name === "p") {
+      } else if (["c", "l", "n", "p", "u"].includes(name)) {
         const parsed = optionValue(argv, index, bundle || null, `-${name}`)
-        const option = name === "c" ? "concurrency" : "profile"
+        const option = ({
+          c: "concurrency",
+          l: "limit",
+          n: "note",
+          p: "profile",
+          u: "until",
+        })[name]
         options[option === "profile" ? "profilePath" : option] = option === "concurrency"
-          ? Number(parsed.value)
-          : parsed.value
+          || option === "limit"
+            ? Number(parsed.value)
+            : parsed.value
         provided.add(option)
         index = parsed.index
         bundle = ""
@@ -390,7 +583,7 @@ export function parseCliArguments(argv) {
   if (options.help || positionals[0] === "help") {
     const route = helpRoute(positionals)
     const helpCommand = route.join(".")
-    if (provided.has("json") || provided.has("profile") || provided.has("concurrency")) {
+    if ([...provided].some((option) => option !== "help")) {
       validateOptions(helpCommand, null, options, provided)
     }
     return Object.freeze({
@@ -459,6 +652,152 @@ function textTargetList(targets) {
   return lines.join("\n")
 }
 
+function incidentFailure(incident) {
+  if (incident.latestStatus !== null) {
+    return `HTTP ${incident.latestStatus}${incident.errorCode
+      ? ` (${incident.errorCode})`
+      : ""}`
+  }
+  return incident.errorCode || incident.failureKind
+}
+
+function incidentSummary(incident) {
+  return Object.freeze({
+    acknowledgedAt: incident.acknowledgedAt,
+    errorCode: incident.errorCode,
+    failureKind: incident.failureKind,
+    id: incident.id,
+    latestSignal: incident.latestSignal,
+    latestStatus: incident.latestStatus,
+    openedAt: incident.openedAt,
+    resolutionReason: incident.resolutionReason,
+    resolvedAt: incident.resolvedAt,
+    snoozedUntil: incident.snoozedUntil,
+    status: incident.status,
+    targetId: incident.targetId,
+  })
+}
+
+function textIncidentList(incidents) {
+  const lines = [
+    "ID\tTARGET\tSTATUS\tFAILURE\tACKNOWLEDGED\tSNOOZED_UNTIL\tOPENED_AT",
+  ]
+  for (const incident of incidents) {
+    lines.push([
+      incident.id,
+      incident.targetId,
+      incident.status,
+      incidentFailure(incident),
+      incident.acknowledgedAt || "-",
+      incident.snoozedUntil || "-",
+      incident.openedAt,
+    ].join("\t"))
+  }
+  lines.push(`${incidents.length} incident(s)`)
+  return lines.join("\n")
+}
+
+function textIncident(incident) {
+  const lines = [
+    `ID\t${incident.id}`,
+    `TARGET\t${incident.targetId}`,
+    `URL\t${incident.targetUrl}`,
+    `STATUS\t${incident.status}`,
+    `FAILURE\t${incidentFailure(incident)}`,
+    `OPENED_AT\t${incident.openedAt}`,
+    `RESOLVED_AT\t${incident.resolvedAt || "-"}`,
+    `RESOLUTION_REASON\t${incident.resolutionReason || "-"}`,
+    `ACKNOWLEDGED_AT\t${incident.acknowledgedAt || "-"}`,
+    `SNOOZED_UNTIL\t${incident.snoozedUntil || "-"}`,
+    "",
+    "CREATED_AT\tACTION\tSNOOZED_UNTIL\tNOTE",
+  ]
+  for (const action of incident.actions) {
+    lines.push([
+      action.createdAt,
+      action.action,
+      action.snoozedUntil || "-",
+      action.note || "-",
+    ].join("\t"))
+  }
+  lines.push(`${incident.actions.length} action(s)`)
+  return lines.join("\n")
+}
+
+async function incidentOperator(parsed, dependencies) {
+  const profile = await loadOperatorProfile(parsed.options.profilePath, dependencies)
+  const wrangler = await loadOperatorWrangler(profile, dependencies)
+  const accountId = dependencies.environment.CLOUDFLARE_ACCOUNT_ID
+  const apiToken = dependencies.environment.CLOUDFLARE_API_TOKEN
+  if (!ACCOUNT_ID_PATTERN.test(accountId || "")) {
+    throw new CliError("CLOUDFLARE_ACCOUNT_ID is unavailable or invalid")
+  }
+  if (typeof apiToken !== "string" || !apiToken) {
+    throw new CliError("CLOUDFLARE_API_TOKEN is unavailable")
+  }
+  return new CloudflareIncidentOperator({
+    accountId,
+    apiToken,
+    clock: dependencies.clock,
+    databaseId: monitorDatabaseId(wrangler),
+    fetchImpl: dependencies.fetchImpl,
+    randomUUID: dependencies.randomUUID,
+  })
+}
+
+async function runIncidentCommand(parsed, dependencies) {
+  const operator = await incidentOperator(parsed, dependencies)
+  if (parsed.command === COMMAND.INCIDENTS_LIST) {
+    const incidents = await operator.list({
+      all: parsed.options.all,
+      limit: parsed.options.limit,
+    })
+    writeLine(
+      dependencies.stdout,
+      parsed.options.json
+        ? JSON.stringify({ incidents: incidents.map(incidentSummary) })
+        : textIncidentList(incidents),
+    )
+    return EXIT.SUCCESS
+  }
+  if (parsed.command === COMMAND.INCIDENTS_SHOW) {
+    const incident = await operator.show(parsed.incidentId)
+    writeLine(
+      dependencies.stdout,
+      parsed.options.json
+        ? JSON.stringify({ incident })
+        : textIncident(incident),
+    )
+    return EXIT.SUCCESS
+  }
+  let action
+  let incident
+  if (parsed.command === COMMAND.INCIDENTS_ACKNOWLEDGE) {
+    action = INCIDENT_ACTION.ACKNOWLEDGED
+    incident = await operator.acknowledge(parsed.incidentId, {
+      note: parsed.options.note,
+    })
+  } else if (parsed.command === COMMAND.INCIDENTS_SNOOZE) {
+    action = INCIDENT_ACTION.SNOOZED
+    incident = await operator.snooze(parsed.incidentId, {
+      note: parsed.options.note,
+      until: parsed.options.until,
+    })
+  } else {
+    action = INCIDENT_ACTION.DISMISSED
+    incident = await operator.dismiss(parsed.incidentId, {
+      note: parsed.options.note,
+    })
+  }
+  writeLine(
+    dependencies.stdout,
+    parsed.options.json
+      ? JSON.stringify({ action, incident })
+      : `${action[0].toUpperCase()}${action.slice(1)} incident ${incident.id}`,
+  )
+  return EXIT.SUCCESS
+}
+
 async function targetForCommand(parsed, dependencies) {
   if (parsed.configPath) {
     return loadTargetDocument(parsed.configPath, dependencies)
@@ -509,6 +848,7 @@ export async function runCli(argv, overrides = {}) {
     fetchImpl: globalThis.fetch,
     lstatImpl: lstat,
     readFileImpl: readFile,
+    randomUUID: () => crypto.randomUUID(),
     stderr: process.stderr,
     stdout: process.stdout,
     ...overrides,
@@ -574,6 +914,9 @@ export async function runCli(argv, overrides = {}) {
         dependencies,
       )
     }
+    if (INCIDENT_COMMAND_SET.has(parsed.command)) {
+      return await runIncidentCommand(parsed, dependencies)
+    }
     const { loaded, profile } = await loadOperatorTarget(
       parsed.options.profilePath,
       dependencies,
@@ -605,7 +948,7 @@ export async function runCli(argv, overrides = {}) {
     return EXIT.SUCCESS
   } catch (error) {
     writeLine(dependencies.stderr, `endpoint-monitor: ${error.message}`)
-    return error.exitCode || EXIT.RUNTIME
+    return error.exitCode || (error instanceof TypeError ? EXIT.USAGE : EXIT.RUNTIME)
   }
 }
 

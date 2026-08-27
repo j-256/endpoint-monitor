@@ -5,6 +5,7 @@ import { CloudflareApi } from "../src/adapters/cloudflare/api.mjs"
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
 const API_TOKEN = "test-token"
+const DATABASE_ID = "01234567-89ab-cdef-0123-456789abcdef"
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -58,6 +59,30 @@ test("Cloudflare API posts GraphQL variables without exposing response details",
     query: "query Test { viewer { __typename } }",
     variables,
   })
+})
+
+test("Cloudflare API sends authenticated D1 batches", async () => {
+  let request
+  const api = new CloudflareApi({
+    accountId: ACCOUNT_ID,
+    apiToken: API_TOKEN,
+    fetchImpl: async (url, init) => {
+      request = { init, url: String(url) }
+      return jsonResponse({
+        result: [{ meta: { rows_written: 0 }, results: [{ count: 1 }], success: true }],
+        success: true,
+      })
+    },
+  })
+  const query = { params: ["open"], sql: "SELECT ? AS status" }
+  const result = await api.queryD1(DATABASE_ID, { batch: [query] })
+  assert.deepEqual(result[0].results, [{ count: 1 }])
+  assert.equal(
+    request.url,
+    `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`,
+  )
+  assert.deepEqual(JSON.parse(request.init.body), { batch: [query] })
+  assert.equal(request.init.headers.Authorization, `Bearer ${API_TOKEN}`)
 })
 
 test("Cloudflare API uses fixed errors for HTTP and payload failures", async () => {
@@ -125,5 +150,38 @@ test("Cloudflare API rejects invalid JSON, zone payloads, and pagination", async
   await assert.rejects(
     invalidPagination.listZones(),
     (error) => error.code === "cloudflare-zones-pagination-invalid",
+  )
+})
+
+test("Cloudflare API fixes D1 transport and payload failures", async () => {
+  const network = new CloudflareApi({
+    accountId: ACCOUNT_ID,
+    apiToken: API_TOKEN,
+    fetchImpl: async () => {
+      throw new Error("private network detail")
+    },
+  })
+  await assert.rejects(
+    network.queryD1(DATABASE_ID, { params: [], sql: "SELECT 1" }),
+    (error) => error.code === "cloudflare-d1-failed"
+      && !error.message.includes("private network detail"),
+  )
+
+  const invalid = new CloudflareApi({
+    accountId: ACCOUNT_ID,
+    apiToken: API_TOKEN,
+    fetchImpl: async () => jsonResponse({
+      result: [{ errors: [{ message: "private SQL detail" }], success: false }],
+      success: true,
+    }),
+  })
+  await assert.rejects(
+    invalid.queryD1(DATABASE_ID, { params: [], sql: "SELECT 1" }),
+    (error) => error.code === "cloudflare-d1-invalid"
+      && !error.message.includes("private SQL detail"),
+  )
+  await assert.rejects(
+    invalid.queryD1("invalid", { params: [], sql: "SELECT 1" }),
+    /configuration is invalid/,
   )
 })

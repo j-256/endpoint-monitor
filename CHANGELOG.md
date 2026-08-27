@@ -7,10 +7,12 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 ### Added
 
 - Schema version 2 response validation for normalized redirect locations, media types, bounded text markers, and JSON subsets
+- Operator-only incident listing, inspection, acknowledgement, snooze, and dismissal through authenticated Cloudflare D1 access
 
 ### Changed
 
 - Probe bodies are read only for configured validation, bounded to a 64 KiB prefix or complete JSON body, discarded immediately, and represented by fixed failure codes
+- Resolved delivery transitions wait for their corresponding problem transition, and protected status includes incident acknowledgement and snooze summaries
 
 ## [0.1.0] - 2026-08-27
 

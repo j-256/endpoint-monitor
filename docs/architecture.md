@@ -26,7 +26,7 @@ deterministic scheduler ---> active HTTP probes
 
 `src/probe.mjs` performs exact `GET` or `HEAD` requests with manual redirects and timeouts. It validates normalized redirect locations, media types, bounded text markers, and JSON subsets when configured. Text markers search a bounded prefix and stop the response read on a match; JSON validation requires a complete body within the same 64 KiB cap. Read content is discarded after validation and never returned in observations.
 
-`src/core.mjs` is a pure incident state machine. Healthy targets without exceptional state remain absent. Ordinary failures create or advance candidates, selected edge and origin statuses open immediately, and consecutive active successes recover incidents. Provider observations can open but cannot recover incidents.
+`src/core.mjs` is a pure incident state machine. Healthy targets without exceptional state remain absent. Ordinary failures create or advance candidates, selected edge and origin statuses open immediately, and consecutive active successes recover incidents. Provider observations can open but cannot recover incidents. Operator dismissal is an explicit resolved transition rather than a synthetic successful observation.
 
 `src/hookrelay.mjs` validates structured CloudEvents subscription URLs and signs exact serialized bytes. Delivery transport remains an adapter responsibility.
 
@@ -48,11 +48,17 @@ Provider enrichment is optional. It must filter to configured targets, validate 
 
 ## Cloudflare adapter
 
-The Cloudflare adapter stores configuration, sparse state, incidents, provider-signal fingerprints, and an outbox in D1. A scheduled Worker runs probe, optional analytics, delivery, and hourly maintenance phases under one outbound budget.
+The Cloudflare adapter stores configuration, sparse state, incidents, immutable triage actions, provider-signal fingerprints, and an outbox in D1. A scheduled Worker runs probe, optional analytics, delivery, and hourly maintenance phases under one outbound budget. The operator CLI uses Cloudflare's authenticated D1 API for triage, while the Worker exposes no incident mutation routes.
 
 Cloudflare analytics queries only selected failure statuses for configured hostnames with `requestSource: "eyeball"`. A result is accepted only when its zone belongs to the configured account and its hostname and path exactly match a configured target. Targets with query strings receive active probes but no analytics enrichment because the dataset exposes path separately from query.
 
-Delivery can use a Hookrelay service binding or direct public HTTPS. Both paths share the same explicit subrequest budget. The body stored in the outbox is the body that is signed and sent, so retries preserve event identity and exact bytes.
+Delivery can use a Hookrelay service binding or direct public HTTPS. Both paths share the same explicit subrequest budget. The body stored in the outbox is the body that is signed and sent, so retries preserve event identity and exact bytes. Resolved rows remain ineligible until their corresponding problem row is delivered, preserving transition order through retries and operator snoozes.
+
+## Operator triage
+
+Acknowledgement and snooze append immutable actions without altering incident health. Snooze also delays a pending problem delivery. Dismissal uses a transactional D1 batch to append its action, resolve the incident, clear only state tied to that incident, and create a resolved delivery row when a problem row exists. Operational readers derive the `operator-dismissed` reason from the action because the original incident-table constraint contains only automatic resolution reasons.
+
+Clearing state makes dismissal non-suppressive: a continuing ordinary failure must cross its threshold again, while a configured immediate failure can reopen on the next probe. Removing or changing a target remains the durable way to retire or correct a monitoring contract.
 
 ## Configuration changes
 
@@ -62,6 +68,6 @@ An incident opened with delivery disabled has no outbox row. When delivery is en
 
 ## Consistency and failure behavior
 
-D1 batches group state, incident, and outbox mutations for one transition. Unique indices prevent two open incidents per target and duplicate transition events. Scheduled invocations are expected not to overlap at normal probe timeouts, but those database constraints remain the last line of defense.
+D1 batches group state, incident, action, and outbox mutations for one transition. Unique indices prevent two open incidents per target and duplicate transition events. Guarded operator mutations become no-ops when automatic recovery wins a race. Scheduled invocations are expected not to overlap at normal probe timeouts, but those database constraints remain the last line of defense.
 
 Probe network exceptions and response validation failures become fixed observation codes. Optional analytics errors become fixed error-level Observability records while active probes continue. Critical configuration, D1, scheduling, or subrequest-budget errors fail the scheduled invocation with a bounded code so platform invocation health records the failure.

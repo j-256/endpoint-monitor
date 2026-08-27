@@ -5,6 +5,7 @@ import {
   analyticsObservation,
   createIncident,
   createIncidentCloudEvent,
+  dismissIncident,
   httpObservation,
   networkObservation,
   reduceTargetState,
@@ -194,6 +195,12 @@ test("incidents resolve and suppress with durable reasons", () => {
     RESOLUTION_REASON.CONFIGURATION_REMOVED,
   )
   assert.equal(suppressed.resolutionReason, RESOLUTION_REASON.CONFIGURATION_REMOVED)
+  const dismissed = dismissIncident(incident, RECOVERED_AT)
+  assert.equal(dismissed.resolutionReason, RESOLUTION_REASON.OPERATOR_DISMISSED)
+  const event = createIncidentCloudEvent(dismissed, TRANSITION.RESOLVED)
+  assert.equal(event.data.state, "recovered")
+  assert.equal(event.data.resolutionReason, RESOLUTION_REASON.OPERATOR_DISMISSED)
+  assert.match(event.title, /incident dismissed/)
 })
 
 test("incident events use provider-neutral identity and exact target URLs", () => {
