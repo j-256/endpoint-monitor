@@ -21,7 +21,7 @@ const REQUIRED_FILES = Object.freeze([
   "package-lock.json",
   "package.json",
   "wrangler.example.jsonc",
-  "scripts/targets.mjs",
+  "src/operator.mjs",
 ])
 const FORBIDDEN_BASENAMES = new Set([
   ".dev.vars",
@@ -48,7 +48,14 @@ function candidateFiles() {
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     { cwd: PROJECT_ROOT, encoding: "utf8" },
   )
-  return output.split("\0").filter(Boolean).sort()
+  const deleted = new Set(execFileSync(
+    "git",
+    ["ls-files", "--deleted", "-z"],
+    { cwd: PROJECT_ROOT, encoding: "utf8" },
+  ).split("\0").filter(Boolean))
+  return output.split("\0").filter((filename) => (
+    filename && !deleted.has(filename)
+  )).sort()
 }
 
 function isReservedExampleHostname(hostname) {
@@ -131,11 +138,7 @@ async function structuredIssues(files) {
       issues.push(`.gitignore: missing private artifact ${required}`)
     }
   }
-  for (const executable of [
-    "scripts/configure-cloudflare.mjs",
-    "scripts/targets.mjs",
-    "src/cli.mjs",
-  ]) {
+  for (const executable of ["src/cli.mjs"]) {
     if (!files.includes(executable)) continue
     const metadata = await lstat(path.join(PROJECT_ROOT, executable))
     if ((metadata.mode & 0o111) === 0) {

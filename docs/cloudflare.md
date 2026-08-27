@@ -4,7 +4,7 @@
 
 One Worker and one D1 database are required. A Hookrelay service binding is optional. The Worker does not need KV, Queues, Durable Objects, or Analytics Engine.
 
-The generated `wrangler.jsonc` is operator-specific and ignored. It contains resource identifiers and feature flags but no secrets or targets. The configurator also writes an ignored mode-0600 `.endpoint-monitor.local.json` profile that remembers the target-document and Wrangler paths. `npm run targets` reads that profile to list or probe the explicit targets and to synchronize edits without requiring a D1 identifier. The target document is validated locally and stored as one fingerprinted D1 control row. Reapplying an unchanged document writes nothing, and target-only changes do not require a Worker deployment.
+The generated `wrangler.jsonc` is operator-specific and ignored. It contains resource identifiers and feature flags but no secrets or targets. `endpoint-monitor cloudflare configure` also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile that remembers the target-document and Wrangler-configuration paths. `endpoint-monitor config path`, `endpoint-monitor targets`, `endpoint-monitor probe`, and `endpoint-monitor config sync` read that profile so routine operations do not require a target path or D1 identifier. The target document is validated locally and stored as one fingerprinted D1 control row. Reapplying an unchanged document writes nothing, and target-only changes do not require a Worker deployment.
 
 ## Feature bindings
 

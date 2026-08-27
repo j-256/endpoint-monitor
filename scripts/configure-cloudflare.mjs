@@ -14,7 +14,6 @@ import { fileURLToPath } from "node:url"
 
 import { portableConfiguration } from "../src/config.mjs"
 import { sha256Hex } from "../src/crypto.mjs"
-import { isMainModule } from "../src/main-module.mjs"
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const EXAMPLE_WRANGLER_PATH = path.join(PROJECT_ROOT, "wrangler.example.jsonc")
@@ -50,17 +49,19 @@ class ConfigureError extends Error {
 }
 
 function usage() {
-  return `Usage: configure-cloudflare --config <path> --database-id <uuid> [options]
+  return `Usage: endpoint-monitor cloudflare configure --config <path> --database-id <uuid> [options]
 
 Prepare an ignored mode-0600 wrangler.jsonc and optionally store the validated target document in an existing migrated D1 database. The command never creates Cloudflare resources or installs secrets.
 
+Target documents are JSON with schemaVersion 1, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url.
+
 Required options:
-  -c, --config <path>              Endpoint Monitor JSON source
+  -c, --config <path>              Target document
   -d, --database-id <uuid>         Existing D1 database identifier
 
 Options:
   -o, --output <path>              Generated Wrangler path (default: wrangler.jsonc)
-      --operator-profile <path>    Local target workflow profile (default: beside Wrangler config)
+  -p, --operator-profile <path>    Operator profile (default: beside Wrangler config)
   -w, --worker-name <name>         Worker name (default: endpoint-monitor)
   -s, --hookrelay-service <name>   Optional Hookrelay service binding target
   -a, --analytics                  Enable Cloudflare analytics enrichment
@@ -118,6 +119,7 @@ export function parseConfigureArguments(argv) {
     ["c", "configPath"],
     ["d", "databaseId"],
     ["o", "outputPath"],
+    ["p", "operatorProfilePath"],
     ["s", "hookrelayService"],
     ["w", "workerName"],
   ])
@@ -408,7 +410,7 @@ export async function runConfigure(
   try {
     options = parseConfigureArguments(argv)
   } catch (error) {
-    writeLine(stderr, `configure-cloudflare: ${error.message}`)
+    writeLine(stderr, `endpoint-monitor: ${error.message}`)
     return error.exitCode || EXIT.USAGE
   }
   if (options.help) {
@@ -426,7 +428,7 @@ export async function runConfigure(
       options.analytics || options.applyConfig,
     )
   } catch (error) {
-    writeLine(stderr, `configure-cloudflare: ${error.message}`)
+    writeLine(stderr, `endpoint-monitor: ${error.message}`)
     return error.exitCode || EXIT.USAGE
   }
   if (options.dryRun) {
@@ -464,7 +466,7 @@ export async function runConfigure(
       },
     )
   } catch {
-    writeLine(stderr, "configure-cloudflare: Cannot write generated local configuration")
+    writeLine(stderr, "endpoint-monitor: Cannot write generated local configuration")
     return EXIT.RUNTIME
   }
   let rowsWritten = null
@@ -479,7 +481,7 @@ export async function runConfigure(
         new Date(clock()).toISOString(),
       )
     } catch (error) {
-      writeLine(stderr, `configure-cloudflare: ${error.message}`)
+      writeLine(stderr, `endpoint-monitor: ${error.message}`)
       return error.exitCode || EXIT.RUNTIME
     }
   }
@@ -488,10 +490,6 @@ export async function runConfigure(
     JSON.stringify(outputPlan(options, loaded, resolvedAccountId, rowsWritten)),
   )
   return EXIT.SUCCESS
-}
-
-if (isMainModule(import.meta.url)) {
-  process.exitCode = await runConfigure(process.argv.slice(2))
 }
 
 export { EXIT, usage }

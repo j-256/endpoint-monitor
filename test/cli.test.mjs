@@ -12,10 +12,37 @@ import {
   runCli,
 } from "../src/cli.mjs"
 
+const ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
+const DATABASE_ID = "01234567-89ab-cdef-0123-456789abcdef"
+const PROFILE_PATH = "/private/endpoint-monitor.local.json"
+const CONFIG_PATH = "/private/endpoint-monitor.json"
+const WRANGLER_PATH = "/private/wrangler.jsonc"
+const EXAMPLE_PATH = "/public/wrangler.example.jsonc"
+const PROFILE = JSON.stringify({
+  configPath: CONFIG_PATH,
+  schemaVersion: 1,
+  wranglerPath: WRANGLER_PATH,
+})
 const CONFIGURATION = JSON.stringify({
   defaults: { probeIntervalMinutes: 5 },
   schemaVersion: 1,
   targets: [{ id: "example-home", url: "https://example.com/" }],
+})
+const WRANGLER = JSON.stringify({
+  d1_databases: [{
+    binding: "MONITOR_DB",
+    database_id: DATABASE_ID,
+    database_name: "endpoint-monitor",
+  }],
+})
+const WRANGLER_EXAMPLE = JSON.stringify({
+  d1_databases: [{
+    binding: "MONITOR_DB",
+    database_id: "00000000-0000-0000-0000-000000000000",
+    database_name: "endpoint-monitor",
+  }],
+  name: "endpoint-monitor",
+  vars: {},
 })
 
 function streamFixture() {
@@ -30,131 +57,413 @@ function streamFixture() {
 
 function dependencies(overrides = {}) {
   return {
-    clock: () => Date.parse("2026-08-26T03:00:00.000Z"),
+    clock: () => Date.parse("2026-08-27T03:00:00.000Z"),
+    environment: {},
+    examplePath: EXAMPLE_PATH,
     fetchImpl: async () => new Response(null, { status: 200 }),
-    readFileImpl: async () => CONFIGURATION,
+    lstatImpl: async () => ({
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode: 0o100600,
+    }),
+    readFileImpl: async (filename) => {
+      if (filename === PROFILE_PATH) return PROFILE
+      if (filename === CONFIG_PATH || filename === "targets.json") return CONFIGURATION
+      if (filename === WRANGLER_PATH) return WRANGLER
+      if (filename === EXAMPLE_PATH) return WRANGLER_EXAMPLE
+      throw new Error("unexpected file")
+    },
     stderr: streamFixture(),
     stdout: streamFixture(),
     ...overrides,
   }
 }
 
-test("CLI help documents commands, configuration, and exit statuses", async () => {
-  assert.match(help(), /validate/)
-  assert.match(help(), /schemaVersion 1/)
-  assert.match(help("probe"), /Exit status/)
-  for (const argv of [["--help"], ["-h"], ["probe", "--help"], ["help", "probe"]]) {
-    const deps = dependencies()
-    assert.equal(await runCli(argv, deps), 0)
-    assert.match(deps.stdout.read(), /Usage:/)
-    assert.equal(deps.stderr.read(), "")
+async function commandOutput(argv, overrides = {}) {
+  const deps = dependencies(overrides)
+  const status = await runCli(argv, deps)
+  return {
+    stderr: deps.stderr.read(),
+    status,
+    stdout: deps.stdout.read(),
+  }
+}
+
+test("CLI help covers every route and supports equivalent spellings", async () => {
+  assert.match(help(), /cloudflare configure/)
+  const pairs = [
+    [["help"], ["--help"]],
+    [["help", "config"], ["config", "--help"]],
+    [["help", "config", "path"], ["config", "path", "--help"]],
+    [["help", "config", "show"], ["config", "show", "--help"]],
+    [["help", "config", "validate"], ["config", "validate", "--help"]],
+    [["help", "config", "sync"], ["config", "sync", "--help"]],
+    [["help", "targets"], ["targets", "--help"]],
+    [["help", "probe"], ["probe", "--help"]],
+    [["help", "cloudflare"], ["cloudflare", "--help"]],
+    [["help", "cloudflare", "configure"], ["cloudflare", "configure", "--help"]],
+  ]
+  for (const [leftArgv, rightArgv] of pairs) {
+    const left = await commandOutput(leftArgv)
+    const right = await commandOutput(rightArgv)
+    assert.equal(left.status, 0)
+    assert.equal(right.status, 0)
+    assert.equal(left.stderr, "")
+    assert.equal(right.stderr, "")
+    assert.equal(left.stdout, right.stdout)
+    assert.match(left.stdout, /^Usage: endpoint-monitor/)
   }
 })
 
-test("CLI parser supports long values, glued short values, bundles, and interleaving", () => {
-  assert.deepEqual(
-    parseCliArguments(["-jc3", "probe", "targets.json"]),
-    {
-      command: "probe",
-      configPath: "targets.json",
-      help: false,
-      options: { concurrency: 3, help: false, json: true },
-    },
-  )
-  assert.equal(
-    parseCliArguments(["probe", "--concurrency=4", "targets.json"]).options.concurrency,
-    4,
-  )
-  assert.equal(
-    parseCliArguments(["--json", "probe", "targets.json", "-c", "2"]).options.concurrency,
-    2,
-  )
+test("CLI parser supports option forms, interleaving, and explicit documents", () => {
+  const probe = parseCliArguments(["-jc3", "probe", "targets.json"])
+  assert.equal(probe.command, "probe")
+  assert.equal(probe.configPath, "targets.json")
+  assert.equal(probe.options.concurrency, 3)
+  assert.equal(probe.options.json, true)
+
+  const validate = parseCliArguments([
+    "--json",
+    "config",
+    "validate",
+    "targets.json",
+  ])
+  assert.equal(validate.command, "config.validate")
+  assert.equal(validate.configPath, "targets.json")
+
+  const targets = parseCliArguments([
+    "-jp/private/profile.json",
+    "targets",
+  ])
+  assert.equal(targets.options.json, true)
+  assert.equal(targets.options.profilePath, "/private/profile.json")
   assert.equal(
     parseCliArguments(["probe", "--", "-targets.json"]).configPath,
     "-targets.json",
   )
+
+  const cloudflare = parseCliArguments([
+    "cloudflare",
+    "configure",
+    "--config=targets.json",
+  ])
+  assert.equal(cloudflare.command, "cloudflare.configure")
+  assert.deepEqual(cloudflare.commandArguments, ["--config=targets.json"])
 })
 
-test("CLI rejects unknown, missing, empty, and command-specific options", async () => {
+test("CLI rejects removed commands, unknown routes, and command-specific options", async () => {
   const cases = [
     [],
-    ["unknown", "targets.json"],
-    ["probe"],
-    ["probe", "--unknown", "targets.json"],
-    ["probe", "--concurrency=", "targets.json"],
-    ["probe", "-c0", "targets.json"],
-    ["validate", "-c2", "targets.json"],
-    ["normalize", "--json", "targets.json"],
+    ["validate", "targets.json"],
+    ["normalize", "targets.json"],
+    ["targets", "path"],
+    ["targets", "probe"],
+    ["config"],
+    ["config", "missing"],
+    ["config", "path", "extra"],
+    ["config", "show", "--json", "targets.json"],
+    ["config", "validate", "--profile", PROFILE_PATH, "targets.json"],
+    ["config", "sync", "-c2"],
+    ["probe", "--concurrency=0", "targets.json"],
+    ["probe", "--concurrency="],
+    ["targets", "--profile="],
+    ["targets", "--unknown"],
+    ["cloudflare"],
+    ["cloudflare", "missing"],
+    ["help", "targets", "extra"],
+    ["help", "missing"],
   ]
   for (const argv of cases) {
-    const deps = dependencies()
-    assert.equal(await runCli(argv, deps), 2)
-    assert.match(deps.stderr.read(), /^endpoint-monitor:/)
-    assert.equal(deps.stdout.read(), "")
+    const result = await commandOutput(argv)
+    assert.equal(result.status, 2, argv.join(" "))
+    assert.match(result.stderr, /^endpoint-monitor:/)
+    assert.equal(result.stdout, "")
   }
 })
 
-test("validate and normalize do not require network access", async () => {
-  const validate = dependencies({
-    fetchImpl: async () => {
-      throw new Error("network must not run")
+test("config path resolves the active target document", async () => {
+  const text = await commandOutput(["config", "path", "-p", PROFILE_PATH])
+  assert.equal(text.status, 0)
+  assert.equal(text.stdout, `${CONFIG_PATH}\n`)
+  assert.equal(text.stderr, "")
+
+  const json = await commandOutput([
+    "-jp/private/endpoint-monitor.local.json",
+    "config",
+    "path",
+  ])
+  assert.equal(json.status, 0)
+  assert.deepEqual(JSON.parse(json.stdout), { configPath: CONFIG_PATH })
+})
+
+test("config show and validate support active and explicit target documents", async () => {
+  const active = await commandOutput(["config", "show", "-p", PROFILE_PATH])
+  assert.equal(active.status, 0)
+  const shown = JSON.parse(active.stdout)
+  assert.equal(shown.targets[0].method, "GET")
+  assert.equal(shown.targets[0].failureThreshold, 2)
+
+  const explicit = await commandOutput([
+    "config",
+    "validate",
+    "--json",
+    "targets.json",
+  ], {
+    lstatImpl: async () => {
+      throw new Error("explicit documents do not require private permissions")
     },
   })
-  assert.equal(await runCli(["validate", "--json", "targets.json"], validate), 0)
-  assert.deepEqual(JSON.parse(validate.stdout.read()), { targetCount: 1, valid: true })
+  assert.equal(explicit.status, 0)
+  assert.deepEqual(JSON.parse(explicit.stdout), { targetCount: 1, valid: true })
 
-  const normalize = dependencies()
-  assert.equal(await runCli(["normalize", "targets.json"], normalize), 0)
-  const output = JSON.parse(normalize.stdout.read())
-  assert.equal(output.targets[0].method, "GET")
-  assert.equal(output.targets[0].failureThreshold, 2)
+  const text = await commandOutput([
+    "config",
+    "validate",
+    "-p",
+    PROFILE_PATH,
+  ])
+  assert.equal(text.status, 0)
+  assert.equal(text.stdout, "Valid target document with 1 target(s)\n")
 })
 
-test("probe reports result data and uses failure as its exit status", async () => {
-  const success = dependencies()
-  assert.equal(await runCli(["probe", "targets.json"], success), 0)
-  assert.match(success.stdout.read(), /^OK example-home HTTP 200/m)
-  assert.equal(success.stderr.read(), "")
+test("targets lists the active document in text and JSON", async () => {
+  const text = await commandOutput(["targets", "--profile", PROFILE_PATH])
+  assert.equal(text.status, 0)
+  assert.match(text.stdout, /example-home\tGET\t<500\thttps:\/\/example\.com\//)
+  assert.match(text.stdout, /1 target\(s\)/)
 
-  const failure = dependencies({
+  const json = await commandOutput(["targets", "-jp", PROFILE_PATH])
+  assert.equal(json.status, 0)
+  const output = JSON.parse(json.stdout)
+  assert.equal(output.configPath, CONFIG_PATH)
+  assert.equal(output.targets[0].id, "example-home")
+  assert.equal(output.targets[0].expectedStatuses, null)
+})
+
+test("probe uses the active document, supports explicit documents, and reports failures", async () => {
+  const active = await commandOutput(["probe", "-p", PROFILE_PATH])
+  assert.equal(active.status, 0)
+  assert.match(active.stdout, /^OK example-home HTTP 200/m)
+
+  const explicit = await commandOutput(["probe", "--json", "targets.json"])
+  assert.equal(explicit.status, 0)
+  assert.equal(JSON.parse(explicit.stdout).summary.succeeded, 1)
+
+  const failure = await commandOutput([
+    "probe",
+    "-jp",
+    PROFILE_PATH,
+  ], {
     fetchImpl: async () => new Response(null, { status: 526 }),
   })
-  assert.equal(await runCli(["probe", "-j", "targets.json"], failure), 1)
-  const output = JSON.parse(failure.stdout.read())
-  assert.equal(output.summary.failed, 1)
-  assert.equal(output.results[0].httpStatus, 526)
+  assert.equal(failure.status, 1)
+  assert.equal(JSON.parse(failure.stdout).results[0].httpStatus, 526)
+
+  const runtime = await commandOutput(["probe", "targets.json"], {
+    clock: () => Number.NaN,
+  })
+  assert.equal(runtime.status, 1)
+  assert.equal(runtime.stderr, "endpoint-monitor: Probe execution failed\n")
 })
 
-test("CLI separates file, JSON, configuration, and runtime diagnostics", async () => {
-  const unreadable = dependencies({
+test("config sync uses the profile Wrangler binding and idempotent D1 request", async () => {
+  let request
+  const result = await commandOutput([
+    "config",
+    "sync",
+    "-jp",
+    PROFILE_PATH,
+  ], {
+    environment: {
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
+      CLOUDFLARE_API_TOKEN: "api-token",
+    },
+    fetchImpl: async (url, init) => {
+      request = { init, url }
+      return Response.json({
+        result: [{ meta: { rows_written: 1 }, success: true }],
+        success: true,
+      })
+    },
+  })
+  assert.equal(result.status, 0)
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.rowsWritten, 1)
+  assert.equal(output.targetCount, 1)
+  assert.match(output.configFingerprint, /^sha256:[a-f0-9]{64}$/)
+  assert.equal(request.url.includes(DATABASE_ID), true)
+  assert.equal(JSON.parse(request.init.body).params[4], "2026-08-27T03:00:00.000Z")
+
+  const text = await commandOutput([
+    "config",
+    "sync",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    environment: {
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
+      CLOUDFLARE_API_TOKEN: "api-token",
+    },
+    fetchImpl: async () => Response.json({
+      result: [{ meta: { rows_written: 0 }, success: true }],
+      success: true,
+    }),
+  })
+  assert.equal(text.status, 0)
+  assert.equal(text.stdout, "Synchronized 1 target(s); D1 rows written: 0\n")
+})
+
+test("CLI reports target, profile, Wrangler, and provider preconditions distinctly", async () => {
+  const unreadable = await commandOutput([
+    "config",
+    "validate",
+    "missing.json",
+  ], {
     readFileImpl: async () => {
       throw new Error("private detail")
     },
   })
-  assert.equal(await runCli(["validate", "private.json"], unreadable), 2)
-  assert.match(unreadable.stderr.read(), /Cannot read configuration/)
-  assert.equal(unreadable.stderr.read().includes("private detail"), false)
+  assert.equal(unreadable.status, 2)
+  assert.match(unreadable.stderr, /Cannot read target document/)
+  assert.equal(unreadable.stderr.includes("private detail"), false)
 
-  const json = dependencies({ readFileImpl: async () => "not-json" })
-  assert.equal(await runCli(["validate", "targets.json"], json), 2)
-  assert.match(json.stderr.read(), /not valid JSON/)
+  const invalidJson = await commandOutput([
+    "config",
+    "validate",
+    "targets.json",
+  ], {
+    readFileImpl: async () => "not-json",
+  })
+  assert.equal(invalidJson.status, 2)
+  assert.match(invalidJson.stderr, /Target document is not valid JSON/)
 
-  const invalid = dependencies({
+  const invalidDocument = await commandOutput([
+    "config",
+    "validate",
+    "targets.json",
+  ], {
     readFileImpl: async () => '{"schemaVersion":2,"targets":[]}',
   })
-  assert.equal(await runCli(["validate", "targets.json"], invalid), 2)
-  assert.match(invalid.stderr.read(), /schemaVersion/)
+  assert.equal(invalidDocument.status, 2)
+  assert.match(invalidDocument.stderr, /schemaVersion/)
 
-  const runtime = dependencies({
-    clock: () => Number.NaN,
+  const unsafeProfile = await commandOutput([
+    "config",
+    "path",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    lstatImpl: async () => ({
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode: 0o100644,
+    }),
   })
-  assert.equal(await runCli(["probe", "targets.json"], runtime), 1)
-  assert.equal(runtime.stderr.read(), "endpoint-monitor: Probe execution failed\n")
+  assert.equal(unsafeProfile.status, 2)
+  assert.match(unsafeProfile.stderr, /Operator profile must be a mode-0600 regular file/)
+
+  const unsafeTarget = await commandOutput([
+    "targets",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    lstatImpl: async (filename) => ({
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode: filename === CONFIG_PATH ? 0o100644 : 0o100600,
+    }),
+  })
+  assert.equal(unsafeTarget.status, 2)
+  assert.match(unsafeTarget.stderr, /Target document must be a mode-0600 regular file/)
+
+  const invalidProfile = await commandOutput([
+    "config",
+    "path",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    readFileImpl: async () => JSON.stringify({ schemaVersion: 1 }),
+  })
+  assert.equal(invalidProfile.status, 2)
+  assert.match(invalidProfile.stderr, /Operator profile is invalid/)
+
+  const missingAccount = await commandOutput([
+    "config",
+    "sync",
+    "-p",
+    PROFILE_PATH,
+  ])
+  assert.equal(missingAccount.status, 2)
+  assert.match(missingAccount.stderr, /CLOUDFLARE_ACCOUNT_ID/)
+
+  const missingToken = await commandOutput([
+    "config",
+    "sync",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
+  })
+  assert.equal(missingToken.status, 2)
+  assert.match(missingToken.stderr, /CLOUDFLARE_API_TOKEN/)
+
+  const invalidWrangler = await commandOutput([
+    "config",
+    "sync",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
+    readFileImpl: async (filename) => filename === PROFILE_PATH
+      ? PROFILE
+      : filename === CONFIG_PATH
+        ? CONFIGURATION
+        : "{}",
+  })
+  assert.equal(invalidWrangler.status, 2)
+  assert.match(invalidWrangler.stderr, /MONITOR_DB/)
+
+  const unsafeWrangler = await commandOutput([
+    "config",
+    "sync",
+    "-p",
+    PROFILE_PATH,
+  ], {
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
+    lstatImpl: async (filename) => ({
+      isFile: () => true,
+      isSymbolicLink: () => filename === WRANGLER_PATH,
+      mode: 0o100600,
+    }),
+  })
+  assert.equal(unsafeWrangler.status, 2)
+  assert.match(unsafeWrangler.stderr, /Wrangler configuration must be a mode-0600 regular file/)
 })
 
-test("CLI executes when its entrypoint is reached through a filesystem alias", async (t) => {
+test("cloudflare configure dispatches through the unified command", async () => {
+  const result = await commandOutput([
+    "cloudflare",
+    "configure",
+    "--config",
+    "targets.json",
+    "--database-id",
+    DATABASE_ID,
+    "--dry-run",
+  ])
+  assert.equal(result.status, 0)
+  assert.equal(result.stderr, "")
+  const plan = JSON.parse(result.stdout)
+  assert.equal(plan.dryRun, true)
+  assert.equal(plan.targetCount, 1)
+
+  const invalid = await commandOutput(["cloudflare", "configure"])
+  assert.equal(invalid.status, 2)
+  assert.match(invalid.stderr, /^endpoint-monitor:/)
+})
+
+test("CLI executes when its entrypoint is reached through a filesystem alias", async (context) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "endpoint-monitor-cli-"))
-  t.after(() => rm(directory, { force: true, recursive: true }))
+  context.after(() => rm(directory, { force: true, recursive: true }))
   const entrypoint = fileURLToPath(new URL("../src/cli.mjs", import.meta.url))
   const alias = path.join(directory, "endpoint-monitor.mjs")
   const configuration = path.join(directory, "targets.json")
@@ -163,7 +472,7 @@ test("CLI executes when its entrypoint is reached through a filesystem alias", a
 
   const result = spawnSync(
     process.execPath,
-    [alias, "validate", "--json", configuration],
+    [alias, "config", "validate", "--json", configuration],
     { encoding: "utf8" },
   )
 

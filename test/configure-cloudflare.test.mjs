@@ -59,6 +59,7 @@ function dependencies(overrides = {}) {
 }
 
 test("Cloudflare configurator help documents mutations and required environment", async () => {
+  assert.match(usage(), /^Usage: endpoint-monitor cloudflare configure/)
   assert.match(usage(), /never creates Cloudflare resources/)
   assert.match(usage(), /CLOUDFLARE_API_TOKEN/)
   assert.match(usage(), /Apply migrations/)
@@ -77,7 +78,7 @@ test("Cloudflare configurator parser supports option forms and bundles", () => {
     `--database-id=${DATABASE_ID}`,
     "--hookrelay-service",
     "hookrelay",
-    "--operator-profile=private/operator.json",
+    "-pprivate/operator.json",
     "--worker-name=endpoint-monitor-production",
   ])
   assert.equal(parsed.analytics, true)
@@ -106,7 +107,7 @@ test("Cloudflare configurator rejects missing, unknown, positional, and invalid 
   for (const argv of cases) {
     const deps = dependencies()
     assert.equal(await runConfigure(argv, deps), 2)
-    assert.match(deps.stderr.read(), /^configure-cloudflare:/)
+    assert.match(deps.stderr.read(), /^endpoint-monitor:/)
     assert.equal(deps.stdout.read(), "")
   }
 })

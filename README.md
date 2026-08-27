@@ -16,25 +16,27 @@ Install the pinned development dependencies with Node.js 22 or newer:
 npm ci
 ```
 
+The package exposes one `endpoint-monitor` executable. The examples below use that installed name; from a source checkout without it on `PATH`, substitute `node src/cli.mjs`.
+
 Validate the example without network access:
 
 ```sh
-node src/cli.mjs validate endpoint-monitor.example.json
+endpoint-monitor config validate endpoint-monitor.example.json
 ```
 
-Show the fully resolved configuration:
+Show the fully resolved target document:
 
 ```sh
-node src/cli.mjs normalize endpoint-monitor.example.json
+endpoint-monitor config show endpoint-monitor.example.json
 ```
 
 Probe every target once without persistence or delivery:
 
 ```sh
-node src/cli.mjs probe endpoint-monitor.example.json
+endpoint-monitor probe endpoint-monitor.example.json
 ```
 
-Add `--json` to `validate` or `probe` for machine-readable output. A failed target makes `probe` exit with status 1.
+Add `--json` to `config validate` or `probe` for machine-readable output. A failed target makes `probe` exit with status 1. Both `endpoint-monitor help <command>` and `endpoint-monitor <command> --help` show the same command help.
 
 ## Configuration
 
@@ -78,32 +80,33 @@ Create a D1 database and retain the returned UUID:
 npx wrangler d1 create endpoint-monitor
 ```
 
-Preview generation using an operator-owned target file:
+Preview generation using an operator-owned target document:
 
 ```sh
-npm run configure:cloudflare -- --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --dry-run
+endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --dry-run
 ```
 
 Generate the ignored mode-0600 `wrangler.jsonc`, apply migrations, and store the validated target document in D1:
 
 ```sh
-npm run configure:cloudflare -- --config /path/to/private/endpoint-monitor.json --database-id <database-uuid>
+endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid>
 npm run db:migrate:remote
-npm run configure:cloudflare -- --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --apply-config
+endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --apply-config
 ```
 
-The configurator also writes an ignored mode-0600 `.endpoint-monitor.local.json` profile beside `wrangler.jsonc`. The profile remembers the absolute target-document and Wrangler paths but contains no target values, resource identifiers, or secrets. The configurator does not create resources or install secrets. It uses `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` only when applying D1 configuration, sends the document as a parameterized query, and avoids a write when its fingerprint is unchanged.
+The configurator also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile beside `wrangler.jsonc`. The operator profile remembers the absolute target-document and Wrangler-configuration paths but contains no target values, resource identifiers, or secrets. The configurator does not create resources or install secrets. It uses `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` only when applying D1 configuration, sends the document as a parameterized query, and avoids a write when its fingerprint is unchanged.
 
 Routine target changes do not require remembering the D1 identifier or deployment flags:
 
 ```sh
-npm run targets
-npm run targets -- path
-npm run targets -- probe
-npm run targets -- sync
+endpoint-monitor config path
+endpoint-monitor config validate
+endpoint-monitor targets
+endpoint-monitor probe
+endpoint-monitor config sync
 ```
 
-`targets` lists the explicit IDs, methods, status contracts, and URLs. `targets -- path` identifies the one JSON file to edit. After editing, probe it locally and run `targets -- sync`; the sync validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes.
+`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
 
 Install only the secrets required by selected features through concealed Wrangler input:
 
@@ -117,7 +120,7 @@ npx wrangler secret put ENDPOINT_MONITOR_STATUS_TOKEN
 Regenerate with the desired feature flags. A safe first deployment enables probes but leaves delivery off:
 
 ```sh
-npm run configure:cloudflare -- --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --enabled --status
+endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --enabled --status
 npm run deploy
 ```
 
