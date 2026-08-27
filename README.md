@@ -4,13 +4,27 @@ Endpoint Monitor detects failures on an explicit set of public HTTP and HTTPS UR
 
 The monitoring core is runtime-neutral JavaScript. The included Cloudflare Workers adapter adds deterministic Cron scheduling, exceptional-state-only D1 persistence, Workers Observability logs, optional Cloudflare edge analytics, and signed CloudEvents delivery through Hookrelay.
 
+![Synthetic Endpoint Monitor operator run and incident lifecycle](docs/screenshots/cover.png)
+
 ## Why explicit targets
 
 Traffic, DNS inventory, and provider metadata do not define what should be monitored. They can include retired hosts, external fetch destinations, alternate routes, and hostnames whose useful path is not `/`. Endpoint Monitor therefore treats the configuration file as the only enrollment authority. Provider data may corroborate a configured target but cannot add one.
 
+## Installation
+
+GitHub Releases contain an installable `endpoint-monitor-X.Y.Z.tgz` archive and `SHA256SUMS`. Download both assets, verify the checksum, and install the archive directly so npm does not resolve an unrelated registry package with the same unscoped name:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+npm install --global ./endpoint-monitor-X.Y.Z.tgz
+endpoint-monitor --help
+```
+
+Use a source checkout for Worker deployment or development because it includes the locked Wrangler development dependency and release tooling. See [Releases](docs/releases.md) for artifact contents, GNU checksum verification, versioning, and the maintainer procedure.
+
 ## Quick start
 
-Install the pinned development dependencies with Node.js 22 or newer:
+From a source checkout, install the pinned development dependencies with Node.js 22 or newer:
 
 ```sh
 npm ci
@@ -156,10 +170,9 @@ The core configuration, scheduler, probes, reducer, event model, and Hookrelay s
 ## Development
 
 ```sh
-npm test
-npm run test:coverage
-npm run check:publication
-npm run deploy:dry-run
+npm run check
 ```
 
-`npm run check` runs the complete local release gate. The project is licensed under [AGPL-3.0-only](LICENSE).
+`npm run check` runs the complete local release gate, including package smoke installation and validation of the committed portfolio cover. Install Playwright Chromium with `npx playwright install chromium`, then run `npm run capture:cover` to regenerate `docs/screenshots/cover.png` from its tracked synthetic HTML scene.
+
+See the [changelog](CHANGELOG.md), [release procedure](docs/releases.md), and [contribution guidance](CONTRIBUTING.md). The project is licensed under [AGPL-3.0-only](LICENSE).

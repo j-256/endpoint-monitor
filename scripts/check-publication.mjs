@@ -5,21 +5,35 @@ import { lstat, readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
+import {
+  COVER_PATH,
+  COVER_SOURCE_PATH,
+  validateCoverImage,
+} from "./cover-image.mjs"
 import { isMainModule } from "../src/main-module.mjs"
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const REQUIRED_FILES = Object.freeze([
   ".github/dependabot.yml",
+  ".github/release.yml",
   ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
   ".gitignore",
   "AGENTS.md",
+  "CHANGELOG.md",
   "CONTRIBUTING.md",
   "LICENSE",
   "README.md",
   "SECURITY.md",
+  "docs/releases.md",
+  COVER_PATH,
+  COVER_SOURCE_PATH,
   "endpoint-monitor.example.json",
   "package-lock.json",
   "package.json",
+  "scripts/capture-cover.mjs",
+  "scripts/cover-image.mjs",
+  "scripts/release.mjs",
   "wrangler.example.jsonc",
   "src/operator.mjs",
 ])
@@ -38,7 +52,7 @@ const FORBIDDEN_UNICODE = new Set([0x2014, 0x2018, 0x2019, 0x201c, 0x201d])
 function usage() {
   return `Usage: check-publication [--help]
 
-Check the repository candidate set for required public-project files, private deployment artifacts, machine-local paths, raw Hookrelay routes, private-key material, and unsafe examples.
+Check the repository candidate set for required public-project files, release assets, private deployment artifacts, machine-local paths, raw Hookrelay routes, private-key material, and unsafe examples.
 `
 }
 
@@ -129,6 +143,19 @@ async function structuredIssues(files) {
   if (packageJson.license !== "AGPL-3.0-only") {
     issues.push("package.json: license must be AGPL-3.0-only")
   }
+  if (packageJson.private !== true) {
+    issues.push("package.json: package must remain private")
+  }
+  for (const required of [
+    "capture:cover",
+    "check",
+    "release:build",
+    "release:check",
+  ]) {
+    if (typeof packageJson.scripts?.[required] !== "string") {
+      issues.push(`package.json: missing ${required} script`)
+    }
+  }
   if (packageJson.repository?.url !== "git+https://github.com/j-256/endpoint-monitor.git") {
     issues.push("package.json: repository identity is missing or unexpected")
   }
@@ -166,6 +193,14 @@ export async function checkPublication() {
       continue
     }
     if (!metadata.isFile()) continue
+    if (filename === COVER_PATH) {
+      try {
+        validateCoverImage(await readFile(fullPath))
+      } catch (error) {
+        issues.push(`${filename}: ${error.message}`)
+      }
+      continue
+    }
     const content = await readFile(fullPath, "utf8")
     issues.push(...contentIssues(filename, content))
   }

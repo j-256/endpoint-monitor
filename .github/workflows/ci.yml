@@ -16,7 +16,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -29,3 +29,14 @@ jobs:
         run: npm ci
       - name: Run release checks
         run: npm run check
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Render portfolio cover
+        run: npm run capture:cover -- --output "$RUNNER_TEMP/endpoint-monitor-cover.png"
+      - name: Upload portfolio cover
+        uses: actions/upload-artifact@v7
+        with:
+          name: endpoint-monitor-cover
+          path: ${{ runner.temp }}/endpoint-monitor-cover.png
+          if-no-files-found: error
+          retention-days: 7

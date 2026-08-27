@@ -24,18 +24,33 @@
   "engines": {
     "node": ">=22"
   },
+  "files": [
+    "CHANGELOG.md",
+    "docs/architecture.md",
+    "docs/cloudflare.md",
+    "endpoint-monitor.example.json",
+    "migrations/",
+    "scripts/configure-cloudflare.mjs",
+    "src/",
+    "wrangler.example.jsonc"
+  ],
   "scripts": {
-    "check": "npm test && npm run test:coverage && npm run check:publication && npm run deploy:dry-run",
+    "capture:cover": "node scripts/capture-cover.mjs",
+    "check": "npm test && npm run test:coverage && npm run check:publication && npm run check:cover && npm run release:check && npm run deploy:dry-run",
+    "check:cover": "node scripts/capture-cover.mjs --check",
     "check:publication": "node scripts/check-publication.mjs",
     "db:migrate:local": "wrangler d1 migrations apply endpoint-monitor --local",
     "db:migrate:remote": "wrangler d1 migrations apply endpoint-monitor --remote",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run --config wrangler.example.jsonc",
     "dev": "wrangler dev",
+    "release:build": "npm run check && node scripts/release.mjs build",
+    "release:check": "node scripts/release.mjs check",
     "test": "node --test test/*.test.mjs",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs"
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=test/** --test-coverage-exclude=scripts/capture-cover.mjs --test-coverage-exclude=scripts/release.mjs --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs"
   },
   "devDependencies": {
+    "playwright": "1.62.1",
     "wrangler": "4.126.0"
   }
 }

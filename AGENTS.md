@@ -4,7 +4,7 @@ Endpoint Monitor is a portable detector for explicit public HTTP and HTTPS targe
 
 Never commit operator target files, deployment configuration, resource identifiers, Hookrelay routes, credentials, machine-local paths, or live incident data. Public examples use reserved example domains and synthetic identifiers only.
 
-Use Node.js 22 or newer. Run focused tests while developing, then run `npm test`, `npm run test:coverage`, `npm run check:publication`, and `npm run deploy:dry-run` before release.
+Use Node.js 22 or newer. Run focused tests while developing, then run `npm run check` before release; it covers tests, coverage, public-source scanning, the portfolio cover, package smoke installation, and the Cloudflare dry run.
 
 Source code and comments use ASCII. Comments do not end in periods. Use Conventional Commits.
 

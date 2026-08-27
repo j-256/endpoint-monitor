@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="dark">
+  <meta name="viewport" content="width=1440, initial-scale=1">
+  <title>Endpoint Monitor project cover</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", Consolas, monospace;
+      font-synthesis: none;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      background: #07100d;
+      height: 1000px;
+      margin: 0;
+      overflow: hidden;
+      width: 1440px;
+    }
+
+    body {
+      color: #d9f7ea;
+    }
+
+    .cover {
+      background: #07100d;
+      display: grid;
+      gap: 28px;
+      grid-template-rows: 132px 1fr 104px;
+      height: 1000px;
+      padding: 58px 64px;
+      position: relative;
+      width: 1440px;
+    }
+
+    .cover::before,
+    .cover::after {
+      border-color: #2e5546;
+      border-style: solid;
+      content: "";
+      height: 34px;
+      position: absolute;
+      width: 34px;
+    }
+
+    .cover::before {
+      border-width: 2px 0 0 2px;
+      left: 28px;
+      top: 28px;
+    }
+
+    .cover::after {
+      border-width: 0 2px 2px 0;
+      bottom: 28px;
+      right: 28px;
+    }
+
+    .masthead {
+      align-items: flex-start;
+      border-bottom: 1px solid #28473c;
+      display: flex;
+      justify-content: space-between;
+      padding-bottom: 28px;
+    }
+
+    .eyebrow {
+      color: #5ee8aa;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      margin-bottom: 15px;
+    }
+
+    h1 {
+      color: #f1fff9;
+      font-size: 51px;
+      letter-spacing: -0.055em;
+      line-height: 0.94;
+      margin: 0;
+    }
+
+    .tagline {
+      color: #91b7a8;
+      font-size: 19px;
+      line-height: 1.5;
+      margin: 14px 0 0;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+      max-width: 470px;
+      padding-top: 3px;
+    }
+
+    .badge {
+      border: 1px solid #376454;
+      color: #a7cabb;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      padding: 10px 13px;
+    }
+
+    .badge.primary {
+      border-color: #43c98e;
+      color: #6df1b6;
+    }
+
+    .content {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: 1.12fr 0.88fr;
+      min-height: 0;
+    }
+
+    .panel {
+      background: #0b1713;
+      border: 1px solid #2a5142;
+      min-height: 0;
+    }
+
+    .panel-head {
+      align-items: center;
+      background: #0f201a;
+      border-bottom: 1px solid #28473c;
+      color: #779b8c;
+      display: flex;
+      font-size: 14px;
+      justify-content: space-between;
+      letter-spacing: 0.08em;
+      padding: 16px 20px;
+      text-transform: uppercase;
+    }
+
+    .dots {
+      display: flex;
+      gap: 7px;
+    }
+
+    .dot {
+      background: #315344;
+      border-radius: 50%;
+      height: 8px;
+      width: 8px;
+    }
+
+    .terminal {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: calc(100% - 50px);
+      padding: 30px;
+    }
+
+    .command {
+      color: #d9f7ea;
+      font-size: 18px;
+      line-height: 1.6;
+    }
+
+    .prompt {
+      color: #5ee8aa;
+    }
+
+    .output {
+      align-self: center;
+      display: grid;
+      gap: 18px;
+      margin: 10px 0;
+    }
+
+    .result {
+      align-items: center;
+      border-left: 3px solid #376454;
+      display: grid;
+      font-size: 20px;
+      gap: 18px;
+      grid-template-columns: 72px 1fr auto;
+      padding: 15px 17px;
+    }
+
+    .result.ok {
+      border-color: #5ee8aa;
+    }
+
+    .result.fail {
+      border-color: #ffb86a;
+    }
+
+    .status-ok {
+      color: #5ee8aa;
+      font-weight: 700;
+    }
+
+    .status-fail {
+      color: #ffb86a;
+      font-weight: 700;
+    }
+
+    .target {
+      color: #effff8;
+    }
+
+    .http {
+      color: #829e93;
+      font-size: 17px;
+    }
+
+    .summary {
+      border-top: 1px solid #233f35;
+      color: #8eb0a2;
+      display: flex;
+      font-size: 16px;
+      justify-content: space-between;
+      padding-top: 21px;
+    }
+
+    .summary strong {
+      color: #d9f7ea;
+    }
+
+    .lifecycle {
+      display: grid;
+      gap: 16px;
+      height: calc(100% - 50px);
+      padding: 27px;
+    }
+
+    .state {
+      align-items: center;
+      border: 1px solid #294b3e;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 98px 1fr auto;
+      padding: 15px 17px;
+    }
+
+    .state-name {
+      color: #eefcf6;
+      font-size: 16px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .state-detail {
+      color: #87a99b;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .write {
+      color: #ffb86a;
+      font-size: 13px;
+      letter-spacing: 0.05em;
+      text-align: right;
+      text-transform: uppercase;
+    }
+
+    .no-write {
+      color: #5ee8aa;
+    }
+
+    .connector {
+      color: #477564;
+      font-size: 13px;
+      height: 10px;
+      letter-spacing: 0.08em;
+      line-height: 10px;
+      padding-left: 19px;
+      text-transform: uppercase;
+    }
+
+    .state.problem {
+      border-color: #a66f3d;
+    }
+
+    .state.recovered {
+      border-color: #3d8d69;
+    }
+
+    .footer {
+      align-items: center;
+      border: 1px solid #28473c;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+      padding: 20px 24px;
+    }
+
+    .footer-step {
+      color: #b7d6c9;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .arrow {
+      color: #4a7967;
+      font-size: 20px;
+    }
+
+    .footer-step strong {
+      color: #67eab0;
+      display: block;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="cover" data-cover-root>
+    <header class="masthead">
+      <div>
+        <div class="eyebrow">SYNTHETIC OPERATOR RUN / EXPLICIT TARGETS ONLY</div>
+        <h1>Endpoint Monitor</h1>
+        <p class="tagline">Portable incident detection for exact public HTTP and HTTPS targets</p>
+      </div>
+      <div class="badges" aria-label="Project properties">
+        <span class="badge primary">RUNTIME NEUTRAL CORE</span>
+        <span class="badge">SPARSE D1 STATE</span>
+        <span class="badge">SIGNED CLOUDEVENTS</span>
+      </div>
+    </header>
+
+    <section class="content" aria-label="Synthetic monitoring example">
+      <article class="panel">
+        <div class="panel-head">
+          <div class="dots" aria-hidden="true">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </div>
+          <span>operator / one-shot probe</span>
+        </div>
+        <div class="terminal">
+          <div class="command"><span class="prompt">$</span> endpoint-monitor probe endpoint-monitor.example.json</div>
+          <div class="output">
+            <div class="result ok">
+              <span class="status-ok">OK</span>
+              <span class="target">example-home</span>
+              <span class="http">HTTP 200</span>
+            </div>
+            <div class="result fail">
+              <span class="status-fail">FAIL</span>
+              <span class="target">example-health</span>
+              <span class="http">HTTP 503</span>
+            </div>
+          </div>
+          <div class="summary">
+            <span><strong>2</strong> configured targets</span>
+            <span><strong>0</strong> discovered targets</span>
+            <span><strong>1</strong> exceptional state</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <span>thresholded incident lifecycle</span>
+          <span>failure 2 / recovery 2</span>
+        </div>
+        <div class="lifecycle">
+          <div class="state">
+            <span class="state-name">Healthy</span>
+            <span class="state-detail">Successful active probe</span>
+            <span class="write no-write">no durable write</span>
+          </div>
+          <div class="connector">HTTP 503</div>
+          <div class="state">
+            <span class="state-name">Candidate</span>
+            <span class="state-detail">Consecutive failure 1 / 2</span>
+            <span class="write">sparse state</span>
+          </div>
+          <div class="connector">HTTP 503</div>
+          <div class="state problem">
+            <span class="state-name">Problem</span>
+            <span class="state-detail">Incident opened at threshold</span>
+            <span class="write">signed event</span>
+          </div>
+          <div class="connector">HTTP 200 x 2</div>
+          <div class="state recovered">
+            <span class="state-name">Recovered</span>
+            <span class="state-detail">Incident resolved by active probes</span>
+            <span class="write">signed event</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-step"><strong>01</strong>explicit config</div>
+      <span class="arrow">-&gt;</span>
+      <div class="footer-step"><strong>02</strong>bounded probes</div>
+      <span class="arrow">-&gt;</span>
+      <div class="footer-step"><strong>03</strong>incident reducer</div>
+      <span class="arrow">-&gt;</span>
+      <div class="footer-step"><strong>04</strong>Hookrelay delivery</div>
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,5 +1,9 @@
 # Security policy
 
+## Supported versions
+
+Security fixes are provided for the latest tagged release. Pre-release source and older tags may receive a fix only when the same change is required for the latest release.
+
 ## Reporting a vulnerability
 
 Use GitHub private vulnerability reporting for this repository. Do not open a public issue containing a credential, private target, Hookrelay route, Worker secret, D1 contents, or exploitable request sequence.
