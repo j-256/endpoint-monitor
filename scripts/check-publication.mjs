@@ -34,6 +34,8 @@ const REQUIRED_FILES = Object.freeze([
   "scripts/capture-cover.mjs",
   "scripts/cover-image.mjs",
   "scripts/release.mjs",
+  "src/adapters/cloudflare/deployment.mjs",
+  "src/project.mjs",
   "wrangler.example.jsonc",
   "src/operator.mjs",
 ])
@@ -143,12 +145,25 @@ async function structuredIssues(files) {
   if (packageJson.license !== "AGPL-3.0-only") {
     issues.push("package.json: license must be AGPL-3.0-only")
   }
+  if (packageJson.name !== "@j-256/endpoint-monitor") {
+    issues.push("package.json: package name must be @j-256/endpoint-monitor")
+  }
   if (packageJson.private !== true) {
     issues.push("package.json: package must remain private")
+  }
+  if (packageJson.bin?.["endpoint-monitor"] !== "src/cli.mjs") {
+    issues.push("package.json: endpoint-monitor executable is missing")
+  }
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(
+    packageJson.dependencies?.wrangler || "",
+  )
+    || packageJson.devDependencies?.wrangler) {
+    issues.push("package.json: Wrangler must be an exact production dependency")
   }
   for (const required of [
     "capture:cover",
     "check",
+    "deploy:dry-run",
     "release:build",
     "release:check",
   ]) {
@@ -160,7 +175,12 @@ async function structuredIssues(files) {
     issues.push("package.json: repository identity is missing or unexpected")
   }
   const ignore = await readFile(path.join(PROJECT_ROOT, ".gitignore"), "utf8")
-  for (const required of [".dev.vars", "endpoint-monitor.json", "wrangler.jsonc"]) {
+  for (const required of [
+    ".dev.vars",
+    ".endpoint-monitor.local.json",
+    "endpoint-monitor.json",
+    "wrangler.jsonc",
+  ]) {
     if (!ignore.split(/\r?\n/).includes(required)) {
       issues.push(`.gitignore: missing private artifact ${required}`)
     }

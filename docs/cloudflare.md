@@ -4,7 +4,23 @@
 
 One Worker and one D1 database are required. A Hookrelay service binding is optional. The Worker does not need KV, Queues, Durable Objects, or Analytics Engine.
 
-The generated `wrangler.jsonc` is operator-specific and ignored. It contains resource identifiers and feature flags but no secrets or targets. `endpoint-monitor cloudflare configure` also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile that remembers the target-document and Wrangler-configuration paths. Configuration, target, probe, and incident commands read that profile so routine operations do not require a target path or D1 identifier. The target document is validated locally and stored as one fingerprinted D1 control row. Reapplying an unchanged document writes nothing, and target-only changes do not require a Worker deployment.
+The `@j-256/endpoint-monitor` package owns both sides of deployment: its CLI is the local controller, while its Worker source, D1 migrations, and Wrangler template are immutable assets from the same installed version. The service and controller are never installed or released independently.
+
+Run `endpoint-monitor init` in a project-local npm installation. It creates an operator-owned target document, an ignored mode-0600 `.endpoint-monitor.local.json` profile, and the required `.gitignore` entries. The generated `wrangler.jsonc` is also operator-specific and ignored. It contains resource identifiers, absolute paths to the installed package assets, and feature flags, but no secrets or targets.
+
+Configuration, target, probe, and incident commands read the operator profile so routine operations do not require a target path or D1 identifier.
+
+`endpoint-monitor cloudflare bootstrap` creates one D1 database or adopts `--database-id <uuid>`, generates the package-resolved Wrangler configuration, and applies the bundled migrations. A dry run validates the target and reports whether the database would be created, adopted, or reused without writing locally or remotely. Reruns reuse the recorded D1 binding and preserve feature selections that were not explicitly supplied.
+
+The lower-level `endpoint-monitor cloudflare configure` command remains available for an operator who already knows the D1 identifier and needs to regenerate local configuration without creating resources. Bootstrap is the normal first-install and package-upgrade path.
+
+`endpoint-monitor deploy --dry-run` bundles the installed Worker without Cloudflare or durable writes. A live deploy applies pending migrations, stores the validated target document as one fingerprinted D1 control row, publishes the Worker, resolves the account's `workers.dev` subdomain, and verifies public `GET /healthz` with bounded retries. Reapplying an unchanged target document writes nothing, and later target-only changes can use `endpoint-monitor config sync` without a Worker deployment.
+
+## Public probe routing
+
+The Worker configuration enables Cloudflare's [`global_fetch_strictly_public`](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public) compatibility flag. Global `fetch()` therefore enters the public Cloudflare routing path instead of using same-zone behavior that can bypass mapped Workers and other public controls. This makes each probe reflect what an external client reaches, which is the monitoring contract.
+
+Public routing can re-enter a Worker. Do not configure this Endpoint Monitor Worker's own `workers.dev` URL or another route that loops back to it as a target. Deployment health verification runs in the local controller, not inside the Worker, so its `/healthz` request does not create that recursion.
 
 ## Feature bindings
 
@@ -57,17 +73,17 @@ The protected status API is the preferred operational view. For direct database 
 The operator CLI provides the authenticated incident view without enabling protected HTTP status:
 
 ```sh
-endpoint-monitor incidents list
-endpoint-monitor incidents list -a -l 50
-endpoint-monitor incidents show <incident-id>
+npm exec -- endpoint-monitor incidents list
+npm exec -- endpoint-monitor incidents list -a -l 50
+npm exec -- endpoint-monitor incidents show <incident-id>
 ```
 
 Mutations require D1 write permission. Acknowledge records review, snooze delays only a pending problem transition, and dismiss resolves while leaving a persistent failure eligible to reopen:
 
 ```sh
-endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
-endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z
-endpoint-monitor incidents dismiss <incident-id> -n "False positive"
+npm exec -- endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
+npm exec -- endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z
+npm exec -- endpoint-monitor incidents dismiss <incident-id> -n "False positive"
 ```
 
 Every long CLI option has a short equivalent. Use `endpoint-monitor help incidents <command>` for complete forms, environment requirements, and exit statuses. Do not store credentials or private response content in triage notes.

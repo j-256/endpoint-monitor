@@ -10,14 +10,18 @@ import {
   writeFile,
 } from "node:fs/promises"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 
 import { portableConfiguration } from "../src/config.mjs"
 import { sha256Hex } from "../src/crypto.mjs"
+import {
+  PACKAGE_MIGRATIONS_PATH,
+  PACKAGE_WORKER_PATH,
+  PACKAGE_WRANGLER_EXAMPLE_PATH,
+  writePrivateFile,
+} from "../src/project.mjs"
 
-const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const EXAMPLE_WRANGLER_PATH = path.join(PROJECT_ROOT, "wrangler.example.jsonc")
-const DEFAULT_OUTPUT_PATH = path.join(PROJECT_ROOT, "wrangler.jsonc")
+const EXAMPLE_WRANGLER_PATH = PACKAGE_WRANGLER_EXAMPLE_PATH
+const DEFAULT_OUTPUT_PATH = path.resolve("wrangler.jsonc")
 const ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/
 const DATABASE_ID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 const SERVICE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
@@ -60,6 +64,7 @@ Required options:
   -d, --database-id <uuid>         Existing D1 database identifier
 
 Options:
+  -N, --database-name <name>       D1 database name (default: endpoint-monitor)
   -o, --output <path>              Generated Wrangler path (default: wrangler.jsonc)
   -p, --operator-profile <path>    Operator profile (default: beside Wrangler config)
   -w, --worker-name <name>         Worker name (default: endpoint-monitor)
@@ -105,6 +110,7 @@ export function parseConfigureArguments(argv) {
     applyConfig: false,
     configPath: null,
     databaseId: null,
+    databaseName: "endpoint-monitor",
     delivery: false,
     dryRun: false,
     enabled: false,
@@ -118,6 +124,7 @@ export function parseConfigureArguments(argv) {
   const valueOptions = new Map([
     ["c", "configPath"],
     ["d", "databaseId"],
+    ["N", "databaseName"],
     ["o", "outputPath"],
     ["p", "operatorProfilePath"],
     ["s", "hookrelayService"],
@@ -126,6 +133,7 @@ export function parseConfigureArguments(argv) {
   const longValues = new Map([
     ["--config", "configPath"],
     ["--database-id", "databaseId"],
+    ["--database-name", "databaseName"],
     ["--hookrelay-service", "hookrelayService"],
     ["--operator-profile", "operatorProfilePath"],
     ["--output", "outputPath"],
@@ -201,6 +209,9 @@ export function parseConfigureArguments(argv) {
   if (!DATABASE_ID_PATTERN.test(options.databaseId || "")) {
     throw new ConfigureError("--database-id must be a lower-case UUID")
   }
+  if (!SERVICE_NAME_PATTERN.test(options.databaseName)) {
+    throw new ConfigureError("--database-name is invalid")
+  }
   if (!SERVICE_NAME_PATTERN.test(options.workerName)) {
     throw new ConfigureError("--worker-name is invalid")
   }
@@ -258,7 +269,14 @@ function accountId(environment, required) {
   return value
 }
 
-export function buildWranglerConfiguration(example, options, resolvedAccountId) {
+export function buildWranglerConfiguration(
+  example,
+  options,
+  resolvedAccountId,
+  assetPaths = {},
+) {
+  const migrationsPath = assetPaths.migrationsPath ?? PACKAGE_MIGRATIONS_PATH
+  const workerPath = assetPaths.workerPath ?? PACKAGE_WORKER_PATH
   const vars = {
     CLOUDFLARE_ANALYTICS_ENABLED: String(options.analytics),
     ENDPOINT_MONITOR_DELIVERY_ENABLED: String(options.delivery),
@@ -271,44 +289,15 @@ export function buildWranglerConfiguration(example, options, resolvedAccountId) 
     d1_databases: example.d1_databases.map((binding) => ({
       ...binding,
       database_id: options.databaseId,
+      database_name: options.databaseName,
+      migrations_dir: migrationsPath,
     })),
+    main: workerPath,
     name: options.workerName,
     services: options.hookrelayService
       ? [{ binding: "HOOKRELAY", service: options.hookrelayService }]
       : [],
     vars,
-  }
-}
-
-async function writePrivateFile(outputPath, contents, dependencies) {
-  let existing = null
-  try {
-    existing = await dependencies.lstatImpl(outputPath)
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error
-  }
-  if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
-    throw new Error("Generated Wrangler path must be a regular file")
-  }
-  const directory = path.dirname(outputPath)
-  await dependencies.mkdirImpl(directory, { mode: 0o700, recursive: true })
-  const temporary = path.join(
-    directory,
-    `.${path.basename(outputPath)}.tmp-${process.pid}-${crypto.randomUUID()}`,
-  )
-  try {
-    await dependencies.writeFileImpl(temporary, contents, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    })
-    await dependencies.renameImpl(temporary, outputPath)
-    await dependencies.chmodImpl(outputPath, 0o600)
-  } catch (error) {
-    try {
-      await dependencies.unlinkImpl(temporary)
-    } catch {}
-    throw error
   }
 }
 
@@ -371,6 +360,7 @@ function outputPlan(options, loaded, resolvedAccountId, rowsWritten = null) {
     applied: rowsWritten !== null,
     configFingerprint: loaded.configFingerprint,
     databaseId: options.databaseId,
+    databaseName: options.databaseName,
     delivery: options.delivery,
     dryRun: options.dryRun,
     enabled: options.enabled,

@@ -15,11 +15,12 @@ import {
 } from "../scripts/release.mjs"
 
 const VERSION = "0.1.0"
+const PACKAGE_NAME = "@j-256/endpoint-monitor"
 
 function packageMetadata(overrides = {}) {
   return {
     files: [...PACKAGE_FILES],
-    name: "endpoint-monitor",
+    name: PACKAGE_NAME,
     private: true,
     version: VERSION,
     ...overrides,
@@ -28,10 +29,10 @@ function packageMetadata(overrides = {}) {
 
 function lockMetadata(overrides = {}) {
   return {
-    name: "endpoint-monitor",
+    name: PACKAGE_NAME,
     packages: {
       "": {
-        name: "endpoint-monitor",
+        name: PACKAGE_NAME,
         version: VERSION,
       },
     },
@@ -47,14 +48,17 @@ function requiredArchiveFiles() {
     "README.md",
     "docs/architecture.md",
     "docs/cloudflare.md",
+    "docs/releases.md",
     "endpoint-monitor.example.json",
     "migrations/0001_initial.sql",
     "migrations/0002_incident_triage.sql",
     "package.json",
     "scripts/configure-cloudflare.mjs",
+    "src/adapters/cloudflare/deployment.mjs",
     "src/adapters/cloudflare/worker.mjs",
     "src/cli.mjs",
     "src/core.mjs",
+    "src/project.mjs",
     "wrangler.example.jsonc",
   ].map((path) => ({ path }))
 }

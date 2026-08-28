@@ -15,6 +15,10 @@ import {
   runConfigure,
   usage,
 } from "../scripts/configure-cloudflare.mjs"
+import {
+  PACKAGE_MIGRATIONS_PATH,
+  PACKAGE_WORKER_PATH,
+} from "../src/project.mjs"
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
 const DATABASE_ID = "01234567-89ab-cdef-0123-456789abcdef"
@@ -78,6 +82,7 @@ test("Cloudflare configurator parser supports option forms and bundles", () => {
     `--database-id=${DATABASE_ID}`,
     "--hookrelay-service",
     "hookrelay",
+    "--database-name=endpoint-monitor-data",
     "-pprivate/operator.json",
     "--worker-name=endpoint-monitor-production",
   ])
@@ -88,6 +93,7 @@ test("Cloudflare configurator parser supports option forms and bundles", () => {
   assert.equal(parsed.status, true)
   assert.equal(parsed.configPath, "targets.json")
   assert.equal(parsed.databaseId, DATABASE_ID)
+  assert.equal(parsed.databaseName, "endpoint-monitor-data")
   assert.equal(parsed.hookrelayService, "hookrelay")
   assert.equal(parsed.operatorProfilePath, path.resolve("private/operator.json"))
   assert.equal(parsed.workerName, "endpoint-monitor-production")
@@ -102,6 +108,7 @@ test("Cloudflare configurator rejects missing, unknown, positional, and invalid 
     ["--config", "targets.json", "--database-id", "invalid"],
     ["--config", "targets.json", "--database-id", DATABASE_ID, "extra"],
     ["--config", "targets.json", "--database-id", DATABASE_ID, "--worker-name", "Bad_Name"],
+    ["--config", "targets.json", "--database-id", DATABASE_ID, "--database-name", "Bad_Name"],
     ["--config", "same.json", "--database-id", DATABASE_ID, "--output", "same.json"],
     ["--config", "targets.json", "--database-id", DATABASE_ID, "--output", "same.json", "--operator-profile", "same.json"],
   ]
@@ -130,6 +137,9 @@ test("Wrangler generation contains only selected public bindings", () => {
     ACCOUNT_ID,
   )
   assert.equal(generated.d1_databases[0].database_id, DATABASE_ID)
+  assert.equal(generated.d1_databases[0].database_name, "endpoint-monitor")
+  assert.equal(generated.d1_databases[0].migrations_dir, PACKAGE_MIGRATIONS_PATH)
+  assert.equal(generated.main, PACKAGE_WORKER_PATH)
   assert.deepEqual(generated.services, [{ binding: "HOOKRELAY", service: "hookrelay" }])
   assert.equal(generated.vars.CLOUDFLARE_ANALYTICS_ENABLED, "true")
   assert.equal(generated.vars.CLOUDFLARE_ACCOUNT_ID, ACCOUNT_ID)

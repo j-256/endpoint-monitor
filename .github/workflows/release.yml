@@ -33,7 +33,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          dist/endpoint-monitor-*.tgz
+          dist/j-256-endpoint-monitor-*.tgz
           dist/SHA256SUMS
           --fail-on-no-commits
           --generate-notes

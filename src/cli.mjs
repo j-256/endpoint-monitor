@@ -8,6 +8,12 @@ import {
   runConfigure,
   usage as cloudflareConfigureHelp,
 } from "../scripts/configure-cloudflare.mjs"
+import {
+  bootstrapUsage,
+  deployUsage,
+  runBootstrap,
+  runDeploy,
+} from "./adapters/cloudflare/deployment.mjs"
 import { configuredTargets } from "./config.mjs"
 import { isMainModule } from "./main-module.mjs"
 import {
@@ -24,6 +30,7 @@ import {
   INCIDENT_LIST_LIMIT,
 } from "./adapters/cloudflare/operator-incidents.mjs"
 import { INCIDENT_ACTION } from "./constants.mjs"
+import { initUsage, runInit } from "./project.mjs"
 
 const EXIT = Object.freeze({
   MISSING_DEPENDENCY: 3,
@@ -33,16 +40,19 @@ const EXIT = Object.freeze({
 })
 const ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/
 const COMMAND = Object.freeze({
+  CLOUDFLARE_BOOTSTRAP: "cloudflare.bootstrap",
   CLOUDFLARE_CONFIGURE: "cloudflare.configure",
   CONFIG_PATH: "config.path",
   CONFIG_SHOW: "config.show",
   CONFIG_SYNC: "config.sync",
   CONFIG_VALIDATE: "config.validate",
+  DEPLOY: "deploy",
   INCIDENTS_ACKNOWLEDGE: "incidents.acknowledge",
   INCIDENTS_DISMISS: "incidents.dismiss",
   INCIDENTS_LIST: "incidents.list",
   INCIDENTS_SHOW: "incidents.show",
   INCIDENTS_SNOOZE: "incidents.snooze",
+  INIT: "init",
   PROBE: "probe",
   TARGETS: "targets",
 })
@@ -64,12 +74,15 @@ const INCIDENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/
 const HELP_ROUTES = new Set([
   "",
   "cloudflare",
+  "cloudflare bootstrap",
   "cloudflare configure",
   "config",
   "config path",
   "config show",
   "config sync",
   "config validate",
+  "deploy",
+  "init",
   "incidents",
   "incidents acknowledge",
   "incidents dismiss",
@@ -105,7 +118,7 @@ const PROFILE_COMMANDS = new Set([
   COMMAND.PROBE,
   COMMAND.TARGETS,
 ])
-const OPERATOR_PROFILE_HELP = "The mode-0600 operator profile is created by endpoint-monitor cloudflare configure and names the active target document and generated Wrangler configuration."
+const OPERATOR_PROFILE_HELP = "The mode-0600 operator profile is initialized by endpoint-monitor init, updated by Cloudflare configuration, and names the active target document and generated Wrangler configuration."
 const TARGET_DOCUMENT_HELP = "Target documents are JSON with schemaVersion 1 or 2, optional defaults, and a targets array. Each target requires a lower-case DNS-style id and an absolute public HTTP or HTTPS url."
 const INCIDENT_READ_ENVIRONMENT_HELP = `Environment:
   CLOUDFLARE_ACCOUNT_ID  32-character account identifier
@@ -123,6 +136,8 @@ class CliError extends Error {
 
 function help(route = []) {
   const key = route.join(" ")
+  if (key === "init") return initUsage()
+  if (key === "deploy") return deployUsage()
   if (key === "config") return `Usage: endpoint-monitor config <command> [options]
 
 Inspect, validate, or synchronize the active target document.
@@ -316,10 +331,12 @@ ${INCIDENT_WRITE_ENVIRONMENT_HELP}
 Prepare and operate the Cloudflare adapter.
 
 Commands:
+  bootstrap  Create or adopt D1, prepare Wrangler, and apply migrations
   configure  Prepare Wrangler and the local operator profile
 
-Run endpoint-monitor help cloudflare configure for command options.
+Run endpoint-monitor help cloudflare <command> for command options.
 `
+  if (key === "cloudflare bootstrap") return bootstrapUsage()
   if (key === "cloudflare configure") return cloudflareConfigureHelp()
   return `Usage: endpoint-monitor <command> [options]
 
@@ -330,10 +347,13 @@ ${TARGET_DOCUMENT_HELP}
 ${OPERATOR_PROFILE_HELP}
 
 Commands:
+  init                   Initialize a local operator project
+  deploy                 Deploy and verify the bundled Worker
   config <command>       Inspect, validate, or synchronize the target document
   incidents <command>    View or triage durable incidents
   targets                List the active configured targets
   probe [<file>]         Probe the active or supplied target document once
+  cloudflare bootstrap   Create or adopt Cloudflare resources
   cloudflare configure   Prepare the Cloudflare adapter
   help [command ...]     Show command help
 
@@ -489,10 +509,20 @@ function validateOptions(command, configPath, options, provided) {
 }
 
 export function parseCliArguments(argv) {
-  if (argv[0] === "cloudflare" && argv[1] === "configure") {
+  const delegated = new Map([
+    ["init", COMMAND.INIT],
+    ["deploy", COMMAND.DEPLOY],
+    ["cloudflare bootstrap", COMMAND.CLOUDFLARE_BOOTSTRAP],
+    ["cloudflare configure", COMMAND.CLOUDFLARE_CONFIGURE],
+  ])
+  const delegatedKey = argv[0] === "cloudflare"
+    ? argv.slice(0, 2).join(" ")
+    : argv[0]
+  if (delegated.has(delegatedKey)) {
+    const argumentOffset = delegatedKey.startsWith("cloudflare ") ? 2 : 1
     return Object.freeze({
-      command: COMMAND.CLOUDFLARE_CONFIGURE,
-      commandArguments: Object.freeze(argv.slice(2)),
+      command: delegated.get(delegatedKey),
+      commandArguments: Object.freeze(argv.slice(argumentOffset)),
       configPath: null,
       help: false,
       options: null,
@@ -866,6 +896,15 @@ export async function runCli(argv, overrides = {}) {
   }
   if (parsed.command === COMMAND.CLOUDFLARE_CONFIGURE) {
     return runConfigure(parsed.commandArguments, dependencies)
+  }
+  if (parsed.command === COMMAND.CLOUDFLARE_BOOTSTRAP) {
+    return runBootstrap(parsed.commandArguments, dependencies)
+  }
+  if (parsed.command === COMMAND.DEPLOY) {
+    return runDeploy(parsed.commandArguments, dependencies)
+  }
+  if (parsed.command === COMMAND.INIT) {
+    return runInit(parsed.commandArguments, dependencies)
   }
   try {
     if (parsed.command === COMMAND.CONFIG_PATH) {

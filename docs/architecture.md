@@ -60,6 +60,14 @@ Acknowledgement and snooze append immutable actions without altering incident he
 
 Clearing state makes dismissal non-suppressive: a continuing ordinary failure must cross its threshold again, while a configured immediate failure can reopen on the next probe. Removing or changing a target remains the durable way to retire or correct a monitoring contract.
 
+## Distribution and deployment
+
+`@j-256/endpoint-monitor` is one deployable service package rather than two independently versioned products. The package-local `endpoint-monitor` executable controls an operator project, while absolute paths in the generated Wrangler configuration bind deployment to the Worker source and migrations from that exact package installation. Wrangler is a pinned production dependency because deployment is a supported installed-package operation.
+
+Initialization is local-only. Bootstrap owns resource creation or adoption, private configuration generation, and migrations. Deploy owns migration reconciliation, target synchronization, Worker publication, and public health verification. Dry-run forms preserve those phase boundaries without provider or durable writes.
+
+An upgrade replaces the package version, reruns bootstrap to point private configuration at the new immutable assets, checks `deploy --dry-run`, and deploys. A controller from one version cannot silently publish Worker assets from another version because deploy rejects a Wrangler configuration whose Worker or migration paths do not resolve to its own package.
+
 ## Configuration changes
 
 Changing any target field changes its fingerprint. On the next scheduled invocation, the adapter resolves an open incident as `configuration-changed`, clears its sparse state, and emits no misleading recovery event. Removing a target behaves the same way with `configuration-removed`.

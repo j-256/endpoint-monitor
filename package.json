@@ -1,13 +1,15 @@
 {
-  "name": "endpoint-monitor",
+  "name": "@j-256/endpoint-monitor",
   "version": "0.1.0",
   "private": true,
-  "description": "A portable detector for explicit HTTP endpoints with durable incident transitions",
+  "description": "A self-deploying Cloudflare Worker service for explicit public endpoint monitoring",
   "license": "AGPL-3.0-only",
   "keywords": [
     "cloudflare-workers",
-    "monitoring",
-    "uptime"
+    "cloudevents",
+    "d1",
+    "endpoint-monitoring",
+    "uptime-monitoring"
   ],
   "homepage": "https://github.com/j-256/endpoint-monitor#readme",
   "bugs": {
@@ -28,6 +30,7 @@
     "CHANGELOG.md",
     "docs/architecture.md",
     "docs/cloudflare.md",
+    "docs/releases.md",
     "endpoint-monitor.example.json",
     "migrations/",
     "scripts/configure-cloudflare.mjs",
@@ -41,7 +44,7 @@
     "check:publication": "node scripts/check-publication.mjs",
     "db:migrate:local": "wrangler d1 migrations apply endpoint-monitor --local",
     "db:migrate:remote": "wrangler d1 migrations apply endpoint-monitor --remote",
-    "deploy": "wrangler deploy",
+    "deploy": "node src/cli.mjs deploy",
     "deploy:dry-run": "wrangler deploy --dry-run --config wrangler.example.jsonc",
     "dev": "wrangler dev",
     "release:build": "npm run check && node scripts/release.mjs build",
@@ -49,8 +52,10 @@
     "test": "node --test test/*.test.mjs",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=test/** --test-coverage-exclude=scripts/capture-cover.mjs --test-coverage-exclude=scripts/release.mjs --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs"
   },
-  "devDependencies": {
-    "playwright": "1.62.1",
+  "dependencies": {
     "wrangler": "4.126.0"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
   }
 }

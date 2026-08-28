@@ -19,10 +19,13 @@ import { isMainModule } from "../src/main-module.mjs"
 const execFile = promisify(execFileCallback)
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const DIST_DIRECTORY = path.join(PROJECT_ROOT, "dist")
+const PACKAGE_NAME = "@j-256/endpoint-monitor"
+const PLACEHOLDER_DATABASE_ID = "00000000-0000-0000-0000-000000000000"
 const PACKAGE_FILES = Object.freeze([
   "CHANGELOG.md",
   "docs/architecture.md",
   "docs/cloudflare.md",
+  "docs/releases.md",
   "endpoint-monitor.example.json",
   "migrations/",
   "scripts/configure-cloudflare.mjs",
@@ -35,14 +38,17 @@ const REQUIRED_ARCHIVE_FILES = Object.freeze([
   "README.md",
   "docs/architecture.md",
   "docs/cloudflare.md",
+  "docs/releases.md",
   "endpoint-monitor.example.json",
   "migrations/0001_initial.sql",
   "migrations/0002_incident_triage.sql",
   "package.json",
   "scripts/configure-cloudflare.mjs",
   "src/adapters/cloudflare/worker.mjs",
+  "src/adapters/cloudflare/deployment.mjs",
   "src/cli.mjs",
   "src/core.mjs",
+  "src/project.mjs",
   "wrangler.example.jsonc",
 ])
 const ARCHIVE_EXACT_PATHS = new Set([
@@ -51,6 +57,7 @@ const ARCHIVE_EXACT_PATHS = new Set([
   "README.md",
   "docs/architecture.md",
   "docs/cloudflare.md",
+  "docs/releases.md",
   "endpoint-monitor.example.json",
   "package.json",
   "scripts/configure-cloudflare.mjs",
@@ -80,9 +87,9 @@ class ReleaseError extends Error {
 export function usage() {
   return `Usage: node scripts/release.mjs <command> [options]
 
-Validate or build the private npm-format archive distributed through GitHub
-Releases. The build command recreates dist/ and writes the package tarball and
-SHA256SUMS. Neither command publishes, tags, pushes, or deploys.
+Validate or build the installable npm-format archive distributed through
+GitHub Releases. The build command recreates dist/ and writes the package
+tarball and SHA256SUMS. Neither command publishes, tags, pushes, or deploys.
 
 Commands:
   check                 Validate metadata, changelog, package contents, and install
@@ -186,8 +193,8 @@ function releaseHeading(version) {
 
 export function validateReleaseMetadata(packageJson, packageLock, changelog, tag = null) {
   const issues = []
-  if (packageJson.name !== "endpoint-monitor") {
-    issues.push("package name must be endpoint-monitor")
+  if (packageJson.name !== PACKAGE_NAME) {
+    issues.push(`package name must be ${PACKAGE_NAME}`)
   }
   if (!VERSION_PATTERN.test(packageJson.version || "")) {
     issues.push("package version must be semantic version X.Y.Z with an optional prerelease")
@@ -319,12 +326,60 @@ async function smokeInstall() {
     const executable = process.platform === "win32"
       ? path.join(directory, "node_modules", ".bin", "endpoint-monitor.cmd")
       : path.join(directory, "node_modules", ".bin", "endpoint-monitor")
-    const result = await run(executable, [
+    const helpResult = await run(executable, ["--help"], { cwd: directory })
+    if (!/^Usage: endpoint-monitor/m.test(helpResult.stdout)) {
+      throw new ReleaseError("installed CLI help returned unexpected output", EXIT.RUNTIME)
+    }
+    const operatorDirectory = path.join(directory, "operator")
+    const initResult = await run(executable, [
+      "init",
+      "--directory",
+      operatorDirectory,
+    ], { cwd: directory })
+    if (!/^Initialized Endpoint Monitor project/m.test(initResult.stdout)) {
+      throw new ReleaseError("installed init returned unexpected output", EXIT.RUNTIME)
+    }
+    const profilePath = path.join(operatorDirectory, ".endpoint-monitor.local.json")
+    const targetPath = path.join(operatorDirectory, "endpoint-monitor.json")
+    const wranglerPath = path.join(operatorDirectory, "wrangler.jsonc")
+    const bootstrapResult = await run(executable, [
+      "cloudflare",
+      "bootstrap",
+      "--profile",
+      profilePath,
+      "--dry-run",
+    ], { cwd: directory })
+    const bootstrapPlan = JSON.parse(bootstrapResult.stdout)
+    if (bootstrapPlan.databaseAction !== "create" || bootstrapPlan.dryRun !== true) {
+      throw new ReleaseError("installed bootstrap dry run returned unexpected output", EXIT.RUNTIME)
+    }
+    await run(executable, [
+      "cloudflare",
+      "configure",
+      "--config",
+      targetPath,
+      "--database-id",
+      PLACEHOLDER_DATABASE_ID,
+      "--operator-profile",
+      profilePath,
+      "--output",
+      wranglerPath,
+    ], { cwd: directory })
+    const deployResult = await run(executable, [
+      "deploy",
+      "--profile",
+      profilePath,
+      "--dry-run",
+    ], { cwd: directory })
+    if (!/Deployment dry run passed for endpoint-monitor/m.test(deployResult.stdout)) {
+      throw new ReleaseError("installed deploy dry run returned unexpected output", EXIT.RUNTIME)
+    }
+    const validateResult = await run(executable, [
       "config",
       "validate",
-      path.join(PROJECT_ROOT, "endpoint-monitor.example.json"),
+      targetPath,
     ], { cwd: directory })
-    if (!/^Valid target document with \d+ target\(s\)$/m.test(result.stdout)) {
+    if (!/^Valid target document with \d+ target\(s\)$/m.test(validateResult.stdout)) {
       throw new ReleaseError("installed CLI returned unexpected output", EXIT.RUNTIME)
     }
   } finally {

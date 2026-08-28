@@ -90,9 +90,13 @@ async function commandOutput(argv, overrides = {}) {
 }
 
 test("CLI help covers every route and supports equivalent spellings", async () => {
-  assert.match(help(), /cloudflare configure/)
+  assert.match(help(), /cloudflare bootstrap/)
+  assert.match(help(), /deploy/)
+  assert.match(help(), /init/)
   const pairs = [
     [["help"], ["--help"]],
+    [["help", "init"], ["init", "--help"]],
+    [["help", "deploy"], ["deploy", "--help"]],
     [["help", "config"], ["config", "--help"]],
     [["help", "config", "path"], ["config", "path", "--help"]],
     [["help", "config", "show"], ["config", "show", "--help"]],
@@ -107,6 +111,7 @@ test("CLI help covers every route and supports equivalent spellings", async () =
     [["help", "targets"], ["targets", "--help"]],
     [["help", "probe"], ["probe", "--help"]],
     [["help", "cloudflare"], ["cloudflare", "--help"]],
+    [["help", "cloudflare", "bootstrap"], ["cloudflare", "bootstrap", "--help"]],
     [["help", "cloudflare", "configure"], ["cloudflare", "configure", "--help"]],
   ]
   for (const [leftArgv, rightArgv] of pairs) {
@@ -205,6 +210,16 @@ test("CLI parser supports option forms, interleaving, and explicit documents", (
   assert.equal(snooze.command, "incidents.snooze")
   assert.equal(snooze.options.note, "Maintenance")
   assert.equal(snooze.options.until, "2026-08-28T03:00:00Z")
+
+  const bootstrap = parseCliArguments([
+    "cloudflare",
+    "bootstrap",
+    "--dry-run",
+  ])
+  assert.equal(bootstrap.command, "cloudflare.bootstrap")
+  assert.deepEqual(bootstrap.commandArguments, ["--dry-run"])
+  assert.equal(parseCliArguments(["init"]).command, "init")
+  assert.equal(parseCliArguments(["deploy"]).command, "deploy")
 })
 
 test("CLI rejects removed commands, unknown routes, and command-specific options", async () => {

@@ -12,45 +12,42 @@ Traffic, DNS inventory, and provider metadata do not define what should be monit
 
 ## Installation
 
-GitHub Releases contain an installable `endpoint-monitor-X.Y.Z.tgz` archive and `SHA256SUMS`. Download both assets, verify the checksum, and install the archive directly so npm does not resolve an unrelated registry package with the same unscoped name:
+Endpoint Monitor ships as one indivisible package: `@j-256/endpoint-monitor` contains the controller CLI, runtime-neutral monitoring core, Cloudflare Worker, D1 migrations, and deployment templates. Install it into a small operator project rather than globally so the controller always deploys the Worker and migrations from the exact installed version.
+
+GitHub Releases contain an installable `j-256-endpoint-monitor-X.Y.Z.tgz` archive and `SHA256SUMS`. Download both assets, verify the checksum, then create an operator project:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-npm install --global ./endpoint-monitor-X.Y.Z.tgz
-endpoint-monitor --help
+mkdir endpoint-monitor-service
+cd endpoint-monitor-service
+npm init -y
+npm install --save-exact /path/to/j-256-endpoint-monitor-X.Y.Z.tgz
+npm exec -- endpoint-monitor init
 ```
 
-Use a source checkout for Worker deployment or development because it includes the locked Wrangler development dependency and release tooling. See [Releases](docs/releases.md) for artifact contents, GNU checksum verification, versioning, and the maintainer procedure.
+When npm registry publication is enabled, only the install line changes:
+
+```sh
+npm install --save-exact @j-256/endpoint-monitor
+```
+
+The remaining `init`, bootstrap, and deploy commands are identical. The controller and service will not be published separately. See [Releases](docs/releases.md) for artifact contents, GNU checksum verification, versioning, and the maintainer procedure.
 
 ## Quick start
 
-From a source checkout, install the pinned development dependencies with Node.js 22 or newer:
+Use Node.js 22 or newer. `endpoint-monitor init` creates three local files: an editable target document, a mode-0600 operator profile, and `.gitignore` entries that keep the target document, profile, generated Wrangler configuration, and Wrangler state out of version control.
+
+Edit `endpoint-monitor.json`, then validate and probe it without durable writes:
 
 ```sh
-npm ci
+npm exec -- endpoint-monitor config validate
+npm exec -- endpoint-monitor targets
+npm exec -- endpoint-monitor probe
 ```
 
-The package exposes one `endpoint-monitor` executable. The examples below use that installed name; from a source checkout without it on `PATH`, substitute `node src/cli.mjs`.
+Add `--json` to `config validate` or `probe` for machine-readable output. A failed target makes `probe` exit with status 1. Both `npm exec -- endpoint-monitor help <command>` and `npm exec -- endpoint-monitor <command> --help` show command help.
 
-Validate the example without network access:
-
-```sh
-endpoint-monitor config validate endpoint-monitor.example.json
-```
-
-Show the fully resolved target document:
-
-```sh
-endpoint-monitor config show endpoint-monitor.example.json
-```
-
-Probe every target once without persistence or delivery:
-
-```sh
-endpoint-monitor probe endpoint-monitor.example.json
-```
-
-Add `--json` to `config validate` or `probe` for machine-readable output. A failed target makes `probe` exit with status 1. Both `endpoint-monitor help <command>` and `endpoint-monitor <command> --help` show the same command help.
+From a source checkout, run `npm ci` and substitute `node src/cli.mjs` for `npm exec -- endpoint-monitor` when developing the package itself.
 
 ## Configuration
 
@@ -118,36 +115,42 @@ Location validation requires explicit 3xx `expectedStatuses`. Body validation re
 
 The Cloudflare adapter uses one Cron trigger per minute. A stable hash distributes targets across `probeIntervalMinutes`, with at most 10 probes and five concurrent outbound connections per invocation. Configuration that cannot satisfy that cadence is rejected rather than silently probed less often. The adapter also enforces a 45-external-subrequest budget and uses manual redirects. Review the [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before deploying on a different plan or after changing these bounds.
 
-Create a D1 database and retain the returned UUID:
+Set the account-scoped deployment credentials that Wrangler and the controller already recognize:
 
 ```sh
-npx wrangler d1 create endpoint-monitor
+export CLOUDFLARE_ACCOUNT_ID="your-32-character-account-id"
+export CLOUDFLARE_API_TOKEN="your-account-api-token"
 ```
 
-Preview generation using an operator-owned target document:
+Preview the complete resource plan without local, provider, or durable writes. A safe first configuration enables active monitoring while leaving analytics, status, and delivery disabled:
 
 ```sh
-endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --dry-run
+npm exec -- endpoint-monitor cloudflare bootstrap --enabled --dry-run
 ```
 
-Generate the ignored mode-0600 `wrangler.jsonc`, apply migrations, and store the validated target document in D1:
+Bootstrap creates one D1 database, writes the ignored mode-0600 `wrangler.jsonc`, records the resource in the operator profile, and applies the migrations bundled with the installed package. Supply `--database-id <uuid>` to adopt an existing D1 database instead. Rerunning bootstrap reuses the recorded database and preserves selected features.
 
 ```sh
-endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid>
-npm run db:migrate:remote
-endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --apply-config
+npm exec -- endpoint-monitor cloudflare bootstrap --enabled
 ```
 
-The configurator also writes an ignored mode-0600 `.endpoint-monitor.local.json` operator profile beside `wrangler.jsonc`. The operator profile remembers the absolute target-document and Wrangler-configuration paths but contains no target values, resource identifiers, or secrets. The configurator does not create resources or install secrets. It uses `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` only when applying D1 configuration, sends the document as a parameterized query, and avoids a write when its fingerprint is unchanged.
+The operator profile remembers the absolute target-document and Wrangler-configuration paths but contains no target values, resource identifiers, or secrets. `wrangler.jsonc` contains the D1 identifier and feature flags but no secrets or targets.
+
+Check the exact installed Worker bundle, then deploy. A live deploy applies pending migrations, synchronizes the current target document into D1, publishes the Worker, resolves its account `workers.dev` hostname, and retries the public `/healthz` endpoint before succeeding:
+
+```sh
+npm exec -- endpoint-monitor deploy --dry-run
+npm exec -- endpoint-monitor deploy
+```
 
 Routine target changes do not require remembering the D1 identifier or deployment flags:
 
 ```sh
-endpoint-monitor config path
-endpoint-monitor config validate
-endpoint-monitor targets
-endpoint-monitor probe
-endpoint-monitor config sync
+npm exec -- endpoint-monitor config path
+npm exec -- endpoint-monitor config validate
+npm exec -- endpoint-monitor targets
+npm exec -- endpoint-monitor probe
+npm exec -- endpoint-monitor config sync
 ```
 
 `config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
@@ -155,11 +158,11 @@ endpoint-monitor config sync
 Apply every packaged migration before using incident triage commands. The CLI reads the D1 binding from the same operator profile and authenticates directly to Cloudflare with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`:
 
 ```sh
-endpoint-monitor incidents list
-endpoint-monitor incidents show <incident-id>
-endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
-endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z -n "Maintenance window"
-endpoint-monitor incidents dismiss <incident-id> -n "False positive"
+npm exec -- endpoint-monitor incidents list
+npm exec -- endpoint-monitor incidents show <incident-id>
+npm exec -- endpoint-monitor incidents acknowledge <incident-id> -n "Under investigation"
+npm exec -- endpoint-monitor incidents snooze <incident-id> -u 2026-08-28T03:00:00Z -n "Maintenance window"
+npm exec -- endpoint-monitor incidents dismiss <incident-id> -n "False positive"
 ```
 
 `incidents list` shows open incidents by default; add `-a, --all` for resolved history and `-l, --limit` to bound the result. Acknowledgement records review without changing health or delivery. Snooze delays an undelivered problem transition until its future RFC 3339 deadline but does not stop probes or retract an event already sent. Dismissal records an audited `operator-dismissed` resolution, clears exceptional state, and emits a resolved transition only when a corresponding problem transition exists. If the target is still failing, it can reopen after its configured threshold; remove or correct the target instead when the monitoring contract itself is obsolete. Operator notes are stored in D1, so keep credentials and private response content out of them.
@@ -167,17 +170,17 @@ endpoint-monitor incidents dismiss <incident-id> -n "False positive"
 Install only the secrets required by selected features through concealed Wrangler input:
 
 ```sh
-npx wrangler secret put CLOUDFLARE_API_TOKEN
-npx wrangler secret put ENDPOINT_MONITOR_HOOKRELAY_URL
-npx wrangler secret put ENDPOINT_MONITOR_HOOKRELAY_HMAC
-npx wrangler secret put ENDPOINT_MONITOR_STATUS_TOKEN
+npm exec -- wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.jsonc
+npm exec -- wrangler secret put ENDPOINT_MONITOR_HOOKRELAY_URL --config wrangler.jsonc
+npm exec -- wrangler secret put ENDPOINT_MONITOR_HOOKRELAY_HMAC --config wrangler.jsonc
+npm exec -- wrangler secret put ENDPOINT_MONITOR_STATUS_TOKEN --config wrangler.jsonc
 ```
 
-Regenerate with the desired feature flags. A safe first deployment enables probes but leaves delivery off:
+Rerun bootstrap to select optional features, then deploy again. Existing selections are retained when their flags are omitted:
 
 ```sh
-endpoint-monitor cloudflare configure --config /path/to/private/endpoint-monitor.json --database-id <database-uuid> --enabled --status
-npm run deploy
+npm exec -- endpoint-monitor cloudflare bootstrap --analytics --status
+npm exec -- endpoint-monitor deploy
 ```
 
 Add `--analytics` for optional Cloudflare analytics. Add `--delivery` only after the Hookrelay subscription is live. If Hookrelay is another Worker in the same account, add `--hookrelay-service <worker-name>` to use a service binding; otherwise delivery uses the public HTTPS route.

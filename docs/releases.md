@@ -1,6 +1,8 @@
 # Releases
 
-Endpoint Monitor distributes installable npm-format archives through GitHub Releases. It does not publish to the npm registry. A release contains `endpoint-monitor-X.Y.Z.tgz` and `SHA256SUMS`; the workflow does not deploy a Worker or mutate Cloudflare resources.
+Endpoint Monitor distributes one scoped npm package containing the controller CLI, runtime-neutral core, Cloudflare Worker, D1 migrations, and deployment templates. GitHub Releases provide the package as `j-256-endpoint-monitor-X.Y.Z.tgz` with `SHA256SUMS`. The npm registry is a planned second distribution channel for the same package, not a separate controller or service release.
+
+Creating a software release never deploys an operator's Worker or mutates Cloudflare resources. Operators install or upgrade the package in their own local project and explicitly run its bootstrap and deploy commands.
 
 ## Version policy
 
@@ -17,7 +19,7 @@ npm ci
 npm run check
 ```
 
-The gate runs tests and coverage thresholds, scans the publication candidate set, validates the committed project cover, packs and smoke-installs the release archive in a temporary directory, checks the Cloudflare dry-run, and rejects unexpected package files.
+The gate runs tests and coverage thresholds, scans the publication candidate set, validates the committed project cover, packs and smoke-installs the release archive in a temporary operator project, exercises CLI help and initialization, checks a bootstrap plan, bundles the installed Worker with its production Wrangler dependency, and rejects unexpected package files.
 
 To exercise the tagged build without publishing anything, replace `X.Y.Z` with the candidate version:
 
@@ -33,7 +35,12 @@ This recreates ignored `dist/`, writes the installable tarball, and writes its S
 2. Move the completed entries under `Unreleased` into a dated `## [X.Y.Z] - YYYY-MM-DD` changelog section and update comparison links.
 3. Run `npm run check` and inspect `npm pack --dry-run --json` if the distribution boundary changed.
 4. Commit the version preparation with a Conventional Commit.
-5. Create an annotated `vX.Y.Z` tag on the reviewed `main` commit and push `main` and that tag.
+5. Create an annotated `vX.Y.Z` tag on the reviewed `main` commit.
+6. Push `main` and the explicit tag atomically so neither ref is accepted unless both are accepted:
+
+```sh
+git push --atomic origin main vX.Y.Z
+```
 
 The tag-triggered [release workflow](../.github/workflows/release.yml) checks out the exact tagged source, installs the lockfile, validates the tag and package, rebuilds the archive, and creates a GitHub Release with generated notes, the tarball, and `SHA256SUMS`. Its token receives only `contents: write`.
 
@@ -51,12 +58,24 @@ On systems with GNU coreutils:
 sha256sum -c SHA256SUMS
 ```
 
-Install and exercise the verified archive without fetching a package by this name from a registry:
+Install and exercise the verified archive in a project-local operator directory without fetching a package by this name from a registry:
 
 ```sh
-npm install --global ./endpoint-monitor-X.Y.Z.tgz
-endpoint-monitor --help
+mkdir endpoint-monitor-service
+cd endpoint-monitor-service
+npm init -y
+npm install --save-exact /path/to/j-256-endpoint-monitor-X.Y.Z.tgz
+npm exec -- endpoint-monitor init
+npm exec -- endpoint-monitor cloudflare bootstrap --dry-run
 ```
+
+The archive smoke test performs the same lifecycle with synthetic targets and a placeholder D1 binding. It proves packaging and bundling only; it does not create provider resources or publish a Worker.
+
+## npm publication
+
+Registry publication will expose `@j-256/endpoint-monitor` from the same release commit and package allowlist. An operator will replace the archive install with `npm install --save-exact @j-256/endpoint-monitor`; every subsequent command remains unchanged. Publication must retain the package-local executable and exact production Wrangler dependency so the installed controller continues to resolve its matching Worker and migrations.
+
+Before enabling registry publication, configure npm publication authentication and provenance in the release workflow, remove the package's `private` guard in the version-preparation commit, and extend the release gate to inspect the registry-facing artifact. Do not create separate controller and Worker packages.
 
 ## Failed release runs
 
