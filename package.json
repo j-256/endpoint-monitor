@@ -1,6 +1,6 @@
 {
   "name": "@j-256/endpoint-monitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A self-deploying Cloudflare Worker service for explicit public endpoint monitoring",
   "license": "AGPL-3.0-only",
