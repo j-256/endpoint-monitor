@@ -45,7 +45,7 @@ npm exec -- endpoint-monitor targets
 npm exec -- endpoint-monitor probe
 ```
 
-Add `--json` to `config validate` or `probe` for machine-readable output. A failed target makes `probe` exit with status 1. Both `npm exec -- endpoint-monitor help <command>` and `npm exec -- endpoint-monitor <command> --help` show command help.
+Add `--json` to `config validate`, `targets`, or `probe` for machine-readable output. A failed target makes `probe` exit with status 1. Both `npm exec -- endpoint-monitor help <command>` and `npm exec -- endpoint-monitor <command> --help` show command help.
 
 From a source checkout, run `npm ci` and substitute `node src/cli.mjs` for `npm exec -- endpoint-monitor` when developing the package itself.
 
@@ -153,7 +153,7 @@ npm exec -- endpoint-monitor probe
 npm exec -- endpoint-monitor config sync
 ```
 
-`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate` and `probe` use that document automatically; both accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
+`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate`, `targets`, and `probe` use that document automatically; all three accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
 
 Apply every packaged migration before using incident triage commands. The CLI reads the D1 binding from the same operator profile and authenticates directly to Cloudflare with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`:
 

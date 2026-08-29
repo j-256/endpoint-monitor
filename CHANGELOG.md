@@ -4,6 +4,10 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Explicit target-document selection for the `targets` command, matching validation and probing workflows
+
 ## [0.1.0] - 2026-08-28
 
 ### Added

@@ -93,6 +93,7 @@ test("CLI help covers every route and supports equivalent spellings", async () =
   assert.match(help(), /cloudflare bootstrap/)
   assert.match(help(), /deploy/)
   assert.match(help(), /init/)
+  assert.match(help(["targets"]), /\[<target-document>\]/)
   const pairs = [
     [["help"], ["--help"]],
     [["help", "init"], ["init", "--help"]],
@@ -175,6 +176,10 @@ test("CLI parser supports option forms, interleaving, and explicit documents", (
   assert.equal(targets.options.json, true)
   assert.equal(targets.options.profilePath, "/private/profile.json")
   assert.equal(
+    parseCliArguments(["targets", "targets.json"]).configPath,
+    "targets.json",
+  )
+  assert.equal(
     parseCliArguments(["probe", "--", "-targets.json"]).configPath,
     "-targets.json",
   )
@@ -227,8 +232,7 @@ test("CLI rejects removed commands, unknown routes, and command-specific options
     [],
     ["validate", "targets.json"],
     ["normalize", "targets.json"],
-    ["targets", "path"],
-    ["targets", "probe"],
+    ["targets", "path", "extra"],
     ["config"],
     ["incidents"],
     ["incidents", "missing"],
@@ -239,6 +243,7 @@ test("CLI rejects removed commands, unknown routes, and command-specific options
     ["config", "path", "extra"],
     ["config", "show", "--json", "targets.json"],
     ["config", "validate", "--profile", PROFILE_PATH, "targets.json"],
+    ["targets", "--profile", PROFILE_PATH, "targets.json"],
     ["config", "sync", "-c2"],
     ["probe", "--concurrency=0", "targets.json"],
     ["probe", "--concurrency="],
@@ -315,6 +320,13 @@ test("targets lists the active document in text and JSON", async () => {
   assert.equal(output.targets[0].id, "example-home")
   assert.equal(output.targets[0].expect, null)
   assert.equal(output.targets[0].expectedStatuses, null)
+
+  const explicit = await commandOutput(["targets", "--json", "targets.json"])
+  assert.equal(explicit.status, 0)
+  assert.equal(
+    JSON.parse(explicit.stdout).configPath,
+    path.resolve("targets.json"),
+  )
 
   const validatedConfiguration = JSON.stringify({
     schemaVersion: 2,

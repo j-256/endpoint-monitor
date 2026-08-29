@@ -207,9 +207,9 @@ Environment:
   CLOUDFLARE_ACCOUNT_ID  32-character account identifier
   CLOUDFLARE_API_TOKEN   Token with D1 write access
 `
-  if (key === "targets") return `Usage: endpoint-monitor targets [--json] [--profile <path>]
+  if (key === "targets") return `Usage: endpoint-monitor targets [--json] [--profile <path>] [<target-document>]
 
-List IDs, methods, status contracts, and URLs from the active target document.
+List IDs, methods, status contracts, and URLs from a target document. When no target document is supplied, use the one named by the local operator profile.
 
 ${TARGET_DOCUMENT_HELP}
 
@@ -419,10 +419,10 @@ function commandFromPositionals(positionals) {
     return { command, configPath: positionals[2] ?? null }
   }
   if (positionals[0] === "targets") {
-    if (positionals.length > 1) {
-      throw new CliError(`Unexpected argument: ${positionals[1]}`)
+    if (positionals.length > 2) {
+      throw new CliError(`Unexpected argument: ${positionals[2]}`)
     }
-    return { command: COMMAND.TARGETS, configPath: null }
+    return { command: COMMAND.TARGETS, configPath: positionals[1] ?? null }
   }
   if (positionals[0] === "incidents") {
     if (positionals.length === 1) throw new CliError("incidents requires a subcommand")
@@ -829,10 +829,21 @@ async function runIncidentCommand(parsed, dependencies) {
 }
 
 async function targetForCommand(parsed, dependencies) {
+  return (await targetSelectionForCommand(parsed, dependencies)).loaded
+}
+
+async function targetSelectionForCommand(parsed, dependencies) {
   if (parsed.configPath) {
-    return loadTargetDocument(parsed.configPath, dependencies)
+    return {
+      configPath: path.resolve(parsed.configPath),
+      loaded: await loadTargetDocument(parsed.configPath, dependencies),
+    }
   }
-  return (await loadOperatorTarget(parsed.options.profilePath, dependencies)).loaded
+  const { loaded, profile } = await loadOperatorTarget(
+    parsed.options.profilePath,
+    dependencies,
+  )
+  return { configPath: profile.configPath, loaded }
 }
 
 async function runProbe(parsed, loaded, dependencies) {
@@ -933,15 +944,15 @@ export async function runCli(argv, overrides = {}) {
       return EXIT.SUCCESS
     }
     if (parsed.command === COMMAND.TARGETS) {
-      const { loaded, profile } = await loadOperatorTarget(
-        parsed.options.profilePath,
+      const { configPath, loaded } = await targetSelectionForCommand(
+        parsed,
         dependencies,
       )
       const targets = targetList(loaded)
       writeLine(
         dependencies.stdout,
         parsed.options.json
-          ? JSON.stringify({ configPath: profile.configPath, targets })
+          ? JSON.stringify({ configPath, targets })
           : textTargetList(targets),
       )
       return EXIT.SUCCESS
