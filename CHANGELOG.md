@@ -4,6 +4,12 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-29
+
+### Fixed
+
+- Release parser tests isolate ambient GitHub tag metadata so tag-triggered artifact builds verify deterministic parser behavior
+
 ## [0.2.0] - 2026-08-29
 
 ### Added
@@ -28,6 +34,7 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 - Probe bodies are read only for configured validation, bounded to a 64 KiB prefix or complete JSON body, discarded immediately, and represented by fixed failure codes
 - Resolved delivery transitions wait for their corresponding problem transition, and protected status includes incident acknowledgement and snooze summaries
 
-[Unreleased]: https://github.com/j-256/endpoint-monitor/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/j-256/endpoint-monitor/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.2.1
 [0.2.0]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.1.0
