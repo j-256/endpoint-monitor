@@ -16,6 +16,7 @@ import {
 
 const VERSION = "0.1.0"
 const PACKAGE_NAME = "@j-256/endpoint-monitor"
+const EMPTY_ENVIRONMENT = Object.freeze({})
 
 function packageMetadata(overrides = {}) {
   return {
@@ -74,20 +75,23 @@ function streamFixture() {
 }
 
 test("release parser supports commands, tag forms, interleaving, and help", () => {
-  assert.deepEqual(parseArguments(["check"]), { command: COMMAND.CHECK, tag: null })
-  assert.deepEqual(parseArguments(["--", "check"]), {
+  assert.deepEqual(parseArguments(["check"], EMPTY_ENVIRONMENT), {
     command: COMMAND.CHECK,
     tag: null,
   })
-  assert.deepEqual(parseArguments(["-tv0.1.0", "build"]), {
+  assert.deepEqual(parseArguments(["--", "check"], EMPTY_ENVIRONMENT), {
+    command: COMMAND.CHECK,
+    tag: null,
+  })
+  assert.deepEqual(parseArguments(["-tv0.1.0", "build"], EMPTY_ENVIRONMENT), {
     command: COMMAND.BUILD,
     tag: "v0.1.0",
   })
-  assert.deepEqual(parseArguments(["build", "--tag=v0.1.0"]), {
+  assert.deepEqual(parseArguments(["build", "--tag=v0.1.0"], EMPTY_ENVIRONMENT), {
     command: COMMAND.BUILD,
     tag: "v0.1.0",
   })
-  assert.deepEqual(parseArguments(["--tag", "v0.1.0", "build"]), {
+  assert.deepEqual(parseArguments(["--tag", "v0.1.0", "build"], EMPTY_ENVIRONMENT), {
     command: COMMAND.BUILD,
     tag: "v0.1.0",
   })
@@ -98,13 +102,13 @@ test("release parser supports commands, tag forms, interleaving, and help", () =
     }),
     { command: COMMAND.CHECK, tag: "v0.1.0" },
   )
-  assert.equal(parseArguments(["--help"]).command, COMMAND.HELP)
-  assert.equal(parseArguments(["-h"]).command, COMMAND.HELP)
+  assert.equal(parseArguments(["--help"], EMPTY_ENVIRONMENT).command, COMMAND.HELP)
+  assert.equal(parseArguments(["-h"], EMPTY_ENVIRONMENT).command, COMMAND.HELP)
 })
 
 test("release parser rejects missing, unknown, extra, and conflicting values", () => {
   for (const argv of [[], ["publish"], ["check", "extra"], ["--unknown"], ["--tag="]]) {
-    assert.throws(() => parseArguments(argv), ReleaseError)
+    assert.throws(() => parseArguments(argv, EMPTY_ENVIRONMENT), ReleaseError)
   }
   assert.throws(
     () => parseArguments(["check", "--tag", "v0.1.0"], {
