@@ -1,6 +1,12 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import test from "node:test"
+import {
+  configurationCandidate,
+  d1ConfigurationQuery,
+  writeConfigurationAuthority,
+} from "../src/adapters/cloudflare/configuration-authority.mjs"
+import { d1ApiFetch, d1Fixture } from "./d1.fixture.mjs"
 
 import {
   PACKAGE_MIGRATIONS_PATH,
@@ -347,11 +353,13 @@ test("deploy dry run bundles the package-resolved Worker without Cloudflare acce
   assert.match(deps.stdout.read(), /Deployment dry run passed/)
 })
 
-test("live deploy migrates, syncs, publishes, and verifies public health", async () => {
+test("live deploy initializes absent configuration, publishes, and verifies public health", async (context) => {
   const wranglerCalls = []
   const fetchCalls = []
   const sleeps = []
   let healthAttempts = 0
+  const db = d1Fixture(context)
+  const d1Fetch = d1ApiFetch(db)
   const deps = fixture({
     clock: () => Date.parse("2026-08-27T03:00:00.000Z"),
     environment: {
@@ -359,12 +367,10 @@ test("live deploy migrates, syncs, publishes, and verifies public health", async
       CLOUDFLARE_API_TOKEN: "api-token",
     },
     fetchImpl: async (url, init) => {
+      url = String(url)
       fetchCalls.push({ init, url })
       if (url.endsWith(`/d1/database/${DATABASE_ID}/query`)) {
-        return Response.json({
-          result: [{ meta: { rows_written: 1 }, success: true }],
-          success: true,
-        })
+        return d1Fetch(url, init)
       }
       if (url.endsWith("/workers/subdomain")) {
         return Response.json({ result: { subdomain: "account-name" }, success: true })
@@ -389,7 +395,43 @@ test("live deploy migrates, syncs, publishes, and verifies public health", async
   assert.equal(fetchCalls.some((entry) => entry.url.endsWith("/query")), true)
   assert.equal(fetchCalls.at(-1).url, "https://endpoint-monitor-service.account-name.workers.dev/healthz")
   assert.deepEqual(sleeps, [250])
-  assert.match(deps.stdout.read(), /D1 rows written: 1/)
+  assert.match(deps.stdout.read(), /remote configuration initialized/)
+  assert.match(deps.stdout.read(), /D1 rows written: [1-9]/)
+})
+
+test("deploy preserves online configuration without opening a stale or missing local candidate", async (context) => {
+  const db = d1Fixture(context)
+  const loaded = await configurationCandidate({
+    schemaVersion: 2,
+    targets: [{ id: "online-health", url: "https://example.com/online" }],
+  })
+  await writeConfigurationAuthority(d1ConfigurationQuery(db), loaded.portable, {
+    expectedRevision: 0, expectedFingerprint: loaded.configFingerprint,
+    updatedAt: "2026-09-06T00:00:00.000Z", updatedBy: "online-operator",
+  })
+  const before = db.sqlite.prepare("SELECT * FROM monitor_configuration").get()
+  const changes = db.sqlite.prepare("SELECT total_changes() AS count").get().count
+  const d1Fetch = d1ApiFetch(db, (_url, init) => {
+    assert.match(JSON.parse(init.body).sql, /^SELECT/)
+  })
+  const deps = fixture({
+    hasWrangler: true,
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, CLOUDFLARE_API_TOKEN: "api-token" },
+    readFileImpl: async (filename) => {
+      assert.notEqual(filename, CONFIG_PATH, "Deploy must not read the local candidate when D1 owns configuration")
+      return filename === PROFILE_PATH ? PROFILE : WRANGLER
+    },
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/query")) return d1Fetch(url, init)
+      if (String(url).endsWith("/workers/subdomain")) return Response.json({ result: { subdomain: "account-name" }, success: true })
+      return Response.json({ ok: true, service: "endpoint-monitor" })
+    },
+    runWranglerImpl: async () => {},
+  })
+  assert.equal(await runDeploy(["--profile", PROFILE_PATH], deps), 0, deps.stderr.read())
+  assert.match(deps.stdout.read(), /remote configuration preserved/)
+  assert.deepEqual(db.sqlite.prepare("SELECT * FROM monitor_configuration").get(), before)
+  assert.equal(db.sqlite.prepare("SELECT total_changes() AS count").get().count, changes)
 })
 
 test("health verification retries bounded failures and rejects invalid package config", async () => {

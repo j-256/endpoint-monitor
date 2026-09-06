@@ -136,7 +136,7 @@ npm exec -- endpoint-monitor cloudflare bootstrap --enabled
 
 The operator profile remembers the absolute target-document and Wrangler-configuration paths but contains no target values, resource identifiers, or secrets. `wrangler.jsonc` contains the D1 identifier and feature flags but no secrets or targets.
 
-Check the exact installed Worker bundle, then deploy. A live deploy applies pending migrations, synchronizes the current target document into D1, publishes the Worker, resolves its account `workers.dev` hostname, and retries the public `/healthz` endpoint before succeeding:
+Check the exact installed Worker bundle, then deploy. A live deploy applies pending migrations, initializes an absent D1 configuration from the validated local candidate, preserves any existing online configuration, publishes the Worker, resolves its account `workers.dev` hostname, and retries the public `/healthz` endpoint before succeeding:
 
 ```sh
 npm exec -- endpoint-monitor deploy --dry-run
@@ -150,10 +150,13 @@ npm exec -- endpoint-monitor config path
 npm exec -- endpoint-monitor config validate
 npm exec -- endpoint-monitor targets
 npm exec -- endpoint-monitor probe
-npm exec -- endpoint-monitor config sync
+npm exec -- endpoint-monitor config review
+npm exec -- endpoint-monitor config sync --expect-revision <reviewed-revision> --expect-fingerprint <reviewed-candidate-sha256>
 ```
 
-`config path` identifies the active target document. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate`, `targets`, and `probe` use that document automatically; all three accept an explicit target-document argument for ad hoc use. After editing, probe it locally and run `config sync`; synchronization validates the complete document, reads the existing generated D1 binding, and writes only when the configuration fingerprint changed. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
+`config path` identifies the local candidate. `targets` lists its explicit IDs, methods, status and response contracts, and URLs. Profile-backed `config validate`, `targets`, and `probe` use that document automatically; all three accept an explicit target-document argument for ad hoc use. D1 owns the executing configuration, and deployment does not import a local candidate over online edits. After editing, probe locally and run `config review`; inspect the complete candidate with `config show` and the executing document with `config remote`. Import with the exact remote revision and candidate fingerprint reported by the review. A changed revision or candidate fails without overwriting remote state; an unchanged candidate at the reviewed revision writes nothing. No Worker deployment is required for target-only changes. Use `--profile <path>` with profile-backed commands to select a non-default operator profile.
+
+`config remote` exports private target URLs and expectations to stdout without touching the local candidate. If preserving the export, use a new file with `umask 077` and inspect it before deliberately replacing a local candidate. Do not paste its contents into shared logs. Apply packaged migrations before configuration review or import; older unconditional writers fail closed after the revision-authority migration.
 
 Apply every packaged migration before using incident triage commands. The CLI reads the D1 binding from the same operator profile and authenticates directly to Cloudflare with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`:
 

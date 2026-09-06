@@ -93,6 +93,7 @@ export async function loadStoredConfiguration(db) {
   if (cachedConfiguration?.configJson === stored.configJson) {
     return Object.freeze({
       configFingerprint: stored.configFingerprint,
+      revision: stored.revision,
       configuration: cachedConfiguration.configuration,
       portableConfiguration: cachedConfiguration.portableConfiguration,
       targets: cachedConfiguration.targets,
@@ -128,6 +129,7 @@ export async function loadStoredConfiguration(db) {
   })
   return Object.freeze({
     configFingerprint: stored.configFingerprint,
+    revision: stored.revision,
     configuration,
     portableConfiguration: cachedConfiguration.portableConfiguration,
     targets: cachedConfiguration.targets,

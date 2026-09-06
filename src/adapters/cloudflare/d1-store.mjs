@@ -16,7 +16,8 @@ const READ_TARGET_STATES_SQL = `
   ORDER BY target_id
 `
 const READ_CONFIGURATION_SQL = `
-  SELECT schema_version, config_json, config_fingerprint, target_count, updated_at
+  SELECT schema_version, config_json, config_fingerprint, target_count, updated_at,
+    revision, updated_by, updated_workspace
   FROM monitor_configuration
   WHERE singleton_id = 1
 `
@@ -410,9 +411,12 @@ export async function readStoredConfiguration(db) {
   return Object.freeze({
     configFingerprint: row.config_fingerprint,
     configJson: row.config_json,
+    revision: Number(row.revision),
     schemaVersion: Number(row.schema_version),
     targetCount: Number(row.target_count),
     updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+    updatedWorkspace: row.updated_workspace,
   })
 }
 

@@ -11,8 +11,11 @@ import {
 } from "node:fs/promises"
 import path from "node:path"
 
-import { portableConfiguration } from "../src/config.mjs"
-import { sha256Hex } from "../src/crypto.mjs"
+import {
+  configurationCandidate,
+  validateConfigurationExpectation,
+} from "../src/adapters/cloudflare/configuration-authority.mjs"
+import { CloudflareConfigurationOperator } from "../src/adapters/cloudflare/operator-configuration.mjs"
 import {
   PACKAGE_MIGRATIONS_PATH,
   PACKAGE_WORKER_PATH,
@@ -25,23 +28,6 @@ const DEFAULT_OUTPUT_PATH = path.resolve("wrangler.jsonc")
 const ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/
 const DATABASE_ID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 const SERVICE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
-const CONFIGURATION_SQL = `
-  INSERT INTO monitor_configuration (
-    singleton_id,
-    schema_version,
-    config_json,
-    config_fingerprint,
-    target_count,
-    updated_at
-  ) VALUES (1, ?, ?, ?, ?, ?)
-  ON CONFLICT (singleton_id) DO UPDATE SET
-    schema_version = excluded.schema_version,
-    config_json = excluded.config_json,
-    config_fingerprint = excluded.config_fingerprint,
-    target_count = excluded.target_count,
-    updated_at = excluded.updated_at
-  WHERE monitor_configuration.config_fingerprint <> excluded.config_fingerprint
-`
 
 const EXIT = Object.freeze({ RUNTIME: 1, SUCCESS: 0, USAGE: 2 })
 
@@ -74,7 +60,9 @@ Options:
   -l, --delivery                   Enable Hookrelay delivery
   -t, --status                     Enable authenticated status output
   -n, --dry-run                    Validate and print the plan without writes
-  -i, --apply-config               Upsert configuration into D1
+  -i, --apply-config               Import the reviewed candidate into D1
+  -r, --expect-revision <number>   Remote revision from config review (0 if absent)
+  -f, --expect-fingerprint <hash>  Candidate sha256 fingerprint from config review
   -h, --help                       Show this help
 
 Environment required by --analytics or --apply-config:
@@ -83,7 +71,7 @@ Environment required by --analytics or --apply-config:
 Environment required by --apply-config:
   CLOUDFLARE_API_TOKEN             Token with D1 write access
 
-Install ENDPOINT_MONITOR_HOOKRELAY_URL and ENDPOINT_MONITOR_HOOKRELAY_HMAC before enabling delivery, CLOUDFLARE_API_TOKEN before enabling analytics, and ENDPOINT_MONITOR_STATUS_TOKEN before enabling status. Apply migrations before --apply-config.
+Install ENDPOINT_MONITOR_HOOKRELAY_URL and ENDPOINT_MONITOR_HOOKRELAY_HMAC before enabling delivery, CLOUDFLARE_API_TOKEN before enabling analytics, and ENDPOINT_MONITOR_STATUS_TOKEN before enabling status. Apply migrations before --apply-config. A live --apply-config requires both review expectations and fails without overwriting a newer remote revision or changed candidate. Dry-run preparation does not read remote state and is not a configuration review.
 
 Exit status:
   0  Preparation or apply succeeded
@@ -114,6 +102,8 @@ export function parseConfigureArguments(argv) {
     delivery: false,
     dryRun: false,
     enabled: false,
+    expectedFingerprint: null,
+    expectedRevision: null,
     help: false,
     hookrelayService: null,
     operatorProfilePath: null,
@@ -124,9 +114,11 @@ export function parseConfigureArguments(argv) {
   const valueOptions = new Map([
     ["c", "configPath"],
     ["d", "databaseId"],
+    ["f", "expectedFingerprint"],
     ["N", "databaseName"],
     ["o", "outputPath"],
     ["p", "operatorProfilePath"],
+    ["r", "expectedRevision"],
     ["s", "hookrelayService"],
     ["w", "workerName"],
   ])
@@ -134,6 +126,8 @@ export function parseConfigureArguments(argv) {
     ["--config", "configPath"],
     ["--database-id", "databaseId"],
     ["--database-name", "databaseName"],
+    ["--expect-fingerprint", "expectedFingerprint"],
+    ["--expect-revision", "expectedRevision"],
     ["--hookrelay-service", "hookrelayService"],
     ["--operator-profile", "operatorProfilePath"],
     ["--output", "outputPath"],
@@ -205,6 +199,18 @@ export function parseConfigureArguments(argv) {
     throw new ConfigureError(`Unexpected argument: ${positionals[0]}`)
   }
   if (options.help) return Object.freeze(options)
+  if (options.expectedRevision !== null) {
+    if (!/^(0|[1-9][0-9]*)$/.test(options.expectedRevision)) {
+      throw new ConfigureError("--expect-revision must be a nonnegative integer")
+    }
+    options.expectedRevision = Number(options.expectedRevision)
+  }
+  if (options.applyConfig && !options.dryRun) {
+    validateConfigurationExpectation(options.expectedRevision, options.expectedFingerprint)
+  } else if (!options.applyConfig
+    && (options.expectedRevision !== null || options.expectedFingerprint !== null)) {
+    throw new ConfigureError("Review expectations require --apply-config")
+  }
   if (!options.configPath) throw new ConfigureError("--config is required")
   if (!DATABASE_ID_PATTERN.test(options.databaseId || "")) {
     throw new ConfigureError("--database-id must be a lower-case UUID")
@@ -248,13 +254,7 @@ async function loadTargetConfiguration(configPath, readFileImpl) {
     throw new ConfigureError(`Configuration is not valid JSON: ${configPath}`)
   }
   try {
-    const portable = portableConfiguration(candidate)
-    const configJson = JSON.stringify(portable)
-    return Object.freeze({
-      configFingerprint: `sha256:${await sha256Hex(configJson)}`,
-      configJson,
-      portable,
-    })
+    return await configurationCandidate(candidate)
   } catch (error) {
     throw new ConfigureError(error.message)
   }
@@ -308,56 +308,19 @@ export async function applyConfiguration(
   databaseId,
   loaded,
   updatedAt,
+  expectations,
 ) {
-  if (typeof apiToken !== "string" || !apiToken) {
-    throw new ConfigureError("CLOUDFLARE_API_TOKEN is unavailable")
-  }
-  const url = `https://api.cloudflare.com/client/v4/accounts/${resolvedAccountId}/d1/database/${databaseId}/query`
-  let response
-  try {
-    response = await fetchImpl(url, {
-      body: JSON.stringify({
-        params: [
-          String(loaded.portable.schemaVersion),
-          loaded.configJson,
-          loaded.configFingerprint,
-          String(loaded.portable.targets.length),
-          updatedAt,
-        ],
-        sql: CONFIGURATION_SQL,
-      }),
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    })
-  } catch {
-    throw new ConfigureError("Cloudflare D1 configuration request failed", EXIT.RUNTIME)
-  }
-  let payload
-  try {
-    payload = await response.json()
-  } catch {
-    throw new ConfigureError("Cloudflare D1 returned invalid JSON", EXIT.RUNTIME)
-  }
-  if (!response.ok
-    || payload.success !== true
-    || !Array.isArray(payload.result)
-    || payload.result.some((entry) => entry.success === false)) {
-    throw new ConfigureError("Cloudflare D1 rejected configuration", EXIT.RUNTIME)
-  }
-  return payload.result.reduce(
-    (total, entry) => total + Number(entry.meta?.rows_written || 0),
-    0,
-  )
+  const operator = new CloudflareConfigurationOperator({
+    accountId: resolvedAccountId, apiToken, databaseId, fetchImpl,
+  })
+  return operator.write(loaded.portable, { ...expectations, updatedAt })
 }
 
-function outputPlan(options, loaded, resolvedAccountId, rowsWritten = null) {
+function outputPlan(options, loaded, resolvedAccountId, applied = null) {
   return Object.freeze({
     analytics: options.analytics,
     applyConfig: options.applyConfig,
-    applied: rowsWritten !== null,
+    applied: applied !== null,
     configFingerprint: loaded.configFingerprint,
     databaseId: options.databaseId,
     databaseName: options.databaseName,
@@ -367,7 +330,9 @@ function outputPlan(options, loaded, resolvedAccountId, rowsWritten = null) {
     hookrelayService: options.hookrelayService,
     operatorProfilePath: options.operatorProfilePath,
     outputPath: path.resolve(options.outputPath),
-    rowsWritten,
+    expectedRevision: options.expectedRevision,
+    revision: applied?.revision ?? null,
+    rowsWritten: applied?.rowsWritten ?? null,
     status: options.status,
     targetCount: loaded.portable.targets.length,
     workerName: options.workerName,
@@ -460,16 +425,17 @@ export async function runConfigure(
     writeLine(stderr, "endpoint-monitor: Cannot write generated local configuration")
     return EXIT.RUNTIME
   }
-  let rowsWritten = null
+  let applied = null
   if (options.applyConfig) {
     try {
-      rowsWritten = await applyConfiguration(
+      applied = await applyConfiguration(
         fetchImpl,
         resolvedAccountId,
         environment.CLOUDFLARE_API_TOKEN,
         options.databaseId,
         loaded,
         new Date(clock()).toISOString(),
+        { expectedRevision: options.expectedRevision, expectedFingerprint: options.expectedFingerprint },
       )
     } catch (error) {
       writeLine(stderr, `endpoint-monitor: ${error.message}`)
@@ -478,7 +444,7 @@ export async function runConfigure(
   }
   writeLine(
     stdout,
-    JSON.stringify(outputPlan(options, loaded, resolvedAccountId, rowsWritten)),
+    JSON.stringify(outputPlan(options, loaded, resolvedAccountId, applied)),
   )
   return EXIT.SUCCESS
 }

@@ -7,6 +7,8 @@ import {
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { configurationCandidate } from "../src/adapters/cloudflare/configuration-authority.mjs"
+import { d1ApiFetch, d1Fixture } from "./d1.fixture.mjs"
 
 import {
   applyConfiguration,
@@ -27,6 +29,7 @@ const CONFIGURATION = JSON.stringify({
   schemaVersion: 1,
   targets: [{ id: "example-home", url: "https://example.com/" }],
 })
+const LOADED = await configurationCandidate(JSON.parse(CONFIGURATION))
 const WRANGLER_EXAMPLE = JSON.stringify({
   d1_databases: [{
     binding: "MONITOR_DB",
@@ -78,6 +81,8 @@ test("Cloudflare configurator help documents mutations and required environment"
 test("Cloudflare configurator parser supports option forms and bundles", () => {
   const parsed = parseConfigureArguments([
     "-aeilt",
+    "-r0",
+    `-f${LOADED.configFingerprint}`,
     "-ctargets.json",
     `--database-id=${DATABASE_ID}`,
     "--hookrelay-service",
@@ -204,45 +209,35 @@ test("preparation writes mode-0600 Wrangler and operator configurations", async 
   assert.equal((await stat(profilePath)).mode & 0o777, 0o600)
 })
 
-test("D1 apply uses a parameterized idempotent configuration upsert", async () => {
+test("D1 apply uses a parameterized reviewed configuration write", async (context) => {
   let request
-  const loaded = {
-    configFingerprint: `sha256:${"a".repeat(64)}`,
-    configJson: CONFIGURATION,
-    portable: JSON.parse(CONFIGURATION),
-  }
-  const rowsWritten = await applyConfiguration(
-    async (url, init) => {
+  const db = d1Fixture(context)
+  const result = await applyConfiguration(
+    d1ApiFetch(db, (url, init) => {
       request = { init, url }
-      return Response.json({
-        result: [{ meta: { rows_written: 1 }, success: true }],
-        success: true,
-      })
-    },
+    }),
     ACCOUNT_ID,
     "api-token",
     DATABASE_ID,
-    loaded,
+    LOADED,
     "2026-08-26T03:00:00.000Z",
+    { expectedRevision: 0, expectedFingerprint: LOADED.configFingerprint },
   )
-  assert.equal(rowsWritten, 1)
+  assert.equal(result.revision, 1)
+  assert.equal(result.changed, true)
+  assert.ok(result.rowsWritten > 0)
   assert.equal(
-    request.url,
+    String(request.url),
     `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`,
   )
   const body = JSON.parse(request.init.body)
-  assert.match(body.sql, /ON CONFLICT/)
+  assert.match(body.sql, /WHERE NOT EXISTS/)
   assert.equal(body.sql.includes(CONFIGURATION), false)
-  assert.equal(body.params[1], CONFIGURATION)
+  assert.equal(body.params[1], LOADED.configJson)
   assert.equal(request.init.headers.Authorization, "Bearer api-token")
 })
 
 test("D1 apply returns fixed errors without API response details", async () => {
-  const loaded = {
-    configFingerprint: `sha256:${"a".repeat(64)}`,
-    configJson: CONFIGURATION,
-    portable: JSON.parse(CONFIGURATION),
-  }
   await assert.rejects(
     applyConfiguration(
       async () => Response.json({
@@ -253,10 +248,11 @@ test("D1 apply returns fixed errors without API response details", async () => {
       ACCOUNT_ID,
       "api-token",
       DATABASE_ID,
-      loaded,
+      LOADED,
       "2026-08-26T03:00:00.000Z",
+      { expectedRevision: 0, expectedFingerprint: LOADED.configFingerprint },
     ),
-    (error) => error.message === "Cloudflare D1 rejected configuration"
+    (error) => error.code === "configuration-request-failed"
       && !error.message.includes("private API detail"),
   )
 })

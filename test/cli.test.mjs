@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
+import { configurationCandidate } from "../src/adapters/cloudflare/configuration-authority.mjs"
+import { d1ApiFetch, d1Fixture } from "./d1.fixture.mjs"
 
 import {
   help,
@@ -28,6 +30,8 @@ const CONFIGURATION = JSON.stringify({
   schemaVersion: 1,
   targets: [{ id: "example-home", url: "https://example.com/" }],
 })
+const LOADED = await configurationCandidate(JSON.parse(CONFIGURATION))
+const INITIAL_REVIEW = ["--expect-revision", "0", "--expect-fingerprint", LOADED.configFingerprint]
 const WRANGLER = JSON.stringify({
   d1_databases: [{
     binding: "MONITOR_DB",
@@ -103,6 +107,8 @@ test("CLI help covers every route and supports equivalent spellings", async () =
     [["help", "config", "show"], ["config", "show", "--help"]],
     [["help", "config", "validate"], ["config", "validate", "--help"]],
     [["help", "config", "sync"], ["config", "sync", "--help"]],
+    [["help", "config", "review"], ["config", "review", "--help"]],
+    [["help", "config", "remote"], ["config", "remote", "--help"]],
     [["help", "incidents"], ["incidents", "--help"]],
     [["help", "incidents", "list"], ["incidents", "list", "--help"]],
     [["help", "incidents", "show"], ["incidents", "show", "--help"]],
@@ -402,11 +408,14 @@ test("probe uses the active document, supports explicit documents, and reports f
   assert.equal(runtime.stderr, "endpoint-monitor: Probe execution failed\n")
 })
 
-test("config sync uses the profile Wrangler binding and idempotent D1 request", async () => {
+test("config sync uses the profile binding and reviewed D1 authority", async (context) => {
   let request
+  const db = d1Fixture(context)
+  const fetchImpl = d1ApiFetch(db, (url, init) => { request = { init, url } })
   const result = await commandOutput([
     "config",
     "sync",
+    ...INITIAL_REVIEW,
     "-jp",
     PROFILE_PATH,
   ], {
@@ -414,25 +423,22 @@ test("config sync uses the profile Wrangler binding and idempotent D1 request", 
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
       CLOUDFLARE_API_TOKEN: "api-token",
     },
-    fetchImpl: async (url, init) => {
-      request = { init, url }
-      return Response.json({
-        result: [{ meta: { rows_written: 1 }, success: true }],
-        success: true,
-      })
-    },
+    fetchImpl,
   })
   assert.equal(result.status, 0)
   const output = JSON.parse(result.stdout)
-  assert.equal(output.rowsWritten, 1)
+  assert.ok(output.rowsWritten > 0)
+  assert.equal(output.revision, 1)
   assert.equal(output.targetCount, 1)
   assert.match(output.configFingerprint, /^sha256:[a-f0-9]{64}$/)
-  assert.equal(request.url.includes(DATABASE_ID), true)
+  assert.equal(String(request.url).includes(DATABASE_ID), true)
   assert.equal(JSON.parse(request.init.body).params[4], "2026-08-27T03:00:00.000Z")
 
   const text = await commandOutput([
     "config",
     "sync",
+    "-r1",
+    `-f${LOADED.configFingerprint}`,
     "-p",
     PROFILE_PATH,
   ], {
@@ -440,13 +446,66 @@ test("config sync uses the profile Wrangler binding and idempotent D1 request", 
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
       CLOUDFLARE_API_TOKEN: "api-token",
     },
-    fetchImpl: async () => Response.json({
-      result: [{ meta: { rows_written: 0 }, success: true }],
-      success: true,
-    }),
+    fetchImpl,
   })
   assert.equal(text.status, 0)
-  assert.equal(text.stdout, "Synchronized 1 target(s); D1 rows written: 0\n")
+  assert.equal(text.stdout, "Synchronized 1 target(s) at revision 1; D1 rows written: 0\n")
+})
+
+test("config review, remote export, and sync share one guarded authority", async (context) => {
+  const db = d1Fixture(context)
+  const overrides = {
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, CLOUDFLARE_API_TOKEN: "api-token" },
+    fetchImpl: d1ApiFetch(db),
+  }
+  const review = await commandOutput(["config", "review", "-jp", PROFILE_PATH], overrides)
+  assert.equal(review.status, 0, review.stderr)
+  assert.equal(JSON.parse(review.stdout).expectedRevision, 0)
+  assert.equal(JSON.parse(review.stdout).expectedFingerprint, LOADED.configFingerprint)
+  const text = await commandOutput(["config", "review", "-p", PROFILE_PATH], overrides)
+  assert.match(text.stdout, /Remote revision: 0/)
+  const absent = await commandOutput(["config", "remote", "-p", PROFILE_PATH], overrides)
+  assert.equal(absent.status, 1)
+  assert.equal(absent.stdout, "")
+  const synced = await commandOutput(["config", "sync", ...INITIAL_REVIEW, "-p", PROFILE_PATH], overrides)
+  assert.equal(synced.status, 0, synced.stderr)
+  const exported = await commandOutput(["config", "remote", "-p", PROFILE_PATH], {
+    ...overrides,
+    readFileImpl: async (filename) => {
+      assert.notEqual(filename, CONFIG_PATH)
+      return filename === PROFILE_PATH ? PROFILE : WRANGLER
+    },
+  })
+  assert.equal(exported.status, 0, exported.stderr)
+  assert.deepEqual(JSON.parse(exported.stdout), LOADED.portable)
+  const stale = await commandOutput(["config", "sync", ...INITIAL_REVIEW, "-p", PROFILE_PATH], overrides)
+  assert.equal(stale.status, 1)
+  assert.match(stale.stderr, /Remote configuration changed/)
+  const changed = await commandOutput(["config", "sync", "-r1", "-f" + LOADED.configFingerprint, "-p", PROFILE_PATH], {
+    ...overrides,
+    readFileImpl: async (filename) => filename === CONFIG_PATH
+      ? JSON.stringify({ schemaVersion: 1, targets: [] })
+      : filename === PROFILE_PATH ? PROFILE : WRANGLER,
+  })
+  assert.equal(changed.status, 2)
+  assert.match(changed.stderr, /candidate changed since review/)
+  assert.equal(db.sqlite.prepare("SELECT revision FROM monitor_configuration").get().revision, 1)
+})
+
+test("configuration review flags reject missing, invalid, and unrelated uses before network access", async () => {
+  for (const argumentsList of [
+    ["config", "sync"],
+    ["config", "sync", "-r0"],
+    ["config", "sync", "--expect-revision=-1", "-f" + LOADED.configFingerprint],
+    ["config", "sync", "-r1.2", "-f" + LOADED.configFingerprint],
+    ["config", "sync", "-r0", "-fbad"],
+    ["config", "review", ...INITIAL_REVIEW],
+    ["config", "remote", "--json"],
+  ]) {
+    const result = await commandOutput(argumentsList, { fetchImpl: () => assert.fail("No network access") })
+    assert.equal(result.status, 2, argumentsList.join(" "))
+    assert.equal(result.stdout, "")
+  }
 })
 
 test("CLI reports target, profile, Wrangler, and provider preconditions distinctly", async () => {
@@ -526,6 +585,7 @@ test("CLI reports target, profile, Wrangler, and provider preconditions distinct
   const missingAccount = await commandOutput([
     "config",
     "sync",
+    ...INITIAL_REVIEW,
     "-p",
     PROFILE_PATH,
   ])
@@ -535,6 +595,7 @@ test("CLI reports target, profile, Wrangler, and provider preconditions distinct
   const missingToken = await commandOutput([
     "config",
     "sync",
+    ...INITIAL_REVIEW,
     "-p",
     PROFILE_PATH,
   ], {
@@ -546,6 +607,7 @@ test("CLI reports target, profile, Wrangler, and provider preconditions distinct
   const invalidWrangler = await commandOutput([
     "config",
     "sync",
+    ...INITIAL_REVIEW,
     "-p",
     PROFILE_PATH,
   ], {
@@ -562,6 +624,7 @@ test("CLI reports target, profile, Wrangler, and provider preconditions distinct
   const unsafeWrangler = await commandOutput([
     "config",
     "sync",
+    ...INITIAL_REVIEW,
     "-p",
     PROFILE_PATH,
   ], {

@@ -30,6 +30,8 @@ import {
   INCIDENT_LIST_LIMIT,
 } from "./adapters/cloudflare/operator-incidents.mjs"
 import { INCIDENT_ACTION } from "./constants.mjs"
+import { validateConfigurationExpectation } from "./adapters/cloudflare/configuration-authority.mjs"
+import { CloudflareConfigurationOperator } from "./adapters/cloudflare/operator-configuration.mjs"
 import { initUsage, runInit } from "./project.mjs"
 
 const EXIT = Object.freeze({
@@ -43,6 +45,8 @@ const COMMAND = Object.freeze({
   CLOUDFLARE_BOOTSTRAP: "cloudflare.bootstrap",
   CLOUDFLARE_CONFIGURE: "cloudflare.configure",
   CONFIG_PATH: "config.path",
+  CONFIG_REMOTE: "config.remote",
+  CONFIG_REVIEW: "config.review",
   CONFIG_SHOW: "config.show",
   CONFIG_SYNC: "config.sync",
   CONFIG_VALIDATE: "config.validate",
@@ -58,6 +62,8 @@ const COMMAND = Object.freeze({
 })
 const CONFIG_COMMANDS = new Map([
   ["path", COMMAND.CONFIG_PATH],
+  ["remote", COMMAND.CONFIG_REMOTE],
+  ["review", COMMAND.CONFIG_REVIEW],
   ["show", COMMAND.CONFIG_SHOW],
   ["sync", COMMAND.CONFIG_SYNC],
   ["validate", COMMAND.CONFIG_VALIDATE],
@@ -78,6 +84,8 @@ const HELP_ROUTES = new Set([
   "cloudflare configure",
   "config",
   "config path",
+  "config remote",
+  "config review",
   "config show",
   "config sync",
   "config validate",
@@ -94,6 +102,7 @@ const HELP_ROUTES = new Set([
 ])
 const JSON_COMMANDS = new Set([
   COMMAND.CONFIG_PATH,
+  COMMAND.CONFIG_REVIEW,
   COMMAND.CONFIG_SYNC,
   COMMAND.CONFIG_VALIDATE,
   COMMAND.INCIDENTS_ACKNOWLEDGE,
@@ -105,8 +114,16 @@ const JSON_COMMANDS = new Set([
   COMMAND.TARGETS,
 ])
 const MAXIMUM_CLI_CONCURRENCY = 20
+const VALUE_OPTION_KEYS = Object.freeze({
+  profile: "profilePath",
+  "expect-revision": "expectedRevision",
+  "expect-fingerprint": "expectedFingerprint",
+})
+const INTEGER_TEXT_PATTERN = /^(0|[1-9][0-9]*)$/
 const PROFILE_COMMANDS = new Set([
   COMMAND.CONFIG_PATH,
+  COMMAND.CONFIG_REMOTE,
+  COMMAND.CONFIG_REVIEW,
   COMMAND.CONFIG_SHOW,
   COMMAND.CONFIG_SYNC,
   COMMAND.CONFIG_VALIDATE,
@@ -140,7 +157,7 @@ function help(route = []) {
   if (key === "deploy") return deployUsage()
   if (key === "config") return `Usage: endpoint-monitor config <command> [options]
 
-Inspect, validate, or synchronize the active target document.
+Inspect, validate, or explicitly import a local candidate. D1 owns the executing configuration.
 
 ${TARGET_DOCUMENT_HELP}
 
@@ -150,7 +167,9 @@ Commands:
   path      Show the active target document path
   show      Show the fully resolved target document
   validate  Validate the target document without network access
-  sync      Idempotently store the active target document in D1
+  remote    Export the executing remote target document as private JSON
+  review    Compare the local candidate with the remote revision
+  sync      Import the candidate with exact review expectations
 
 Run endpoint-monitor help config <command> for command options.
 `
@@ -190,9 +209,34 @@ Options:
   -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
   -h, --help            Show this help
 `
-  if (key === "config sync") return `Usage: endpoint-monitor config sync [--json] [--profile <path>]
+  if (key === "config remote") return `Usage: endpoint-monitor config remote [--profile <path>]
 
-Validate and idempotently store the active target document in the D1 database identified by the generated Wrangler configuration.
+Export the executing D1 target document as JSON on stdout. This contains private target URLs and response expectations. It does not read or overwrite the local candidate. Save output to a new protected file (umask 077), inspect it, then deliberately replace a local candidate if desired. Missing remote configuration is an error, not an empty document.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_READ_ENVIRONMENT_HELP}
+`
+  if (key === "config review") return `Usage: endpoint-monitor config review [--json] [--profile <path>]
+
+Validate the local candidate against Cloudflare schedule capacity and compare it with the executing D1 configuration. Report added, changed, and removed target IDs, defaults changes, the remote revision (0 if absent), and the exact candidate fingerprint. This command writes nothing. Review the complete candidate with config show and compare config remote before approving an import.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_READ_ENVIRONMENT_HELP}
+`
+  if (key === "config sync") return `Usage: endpoint-monitor config sync --expect-revision <number> --expect-fingerprint <hash> [--json] [--profile <path>]
+
+Import a reviewed local candidate into D1. Both the remote revision and candidate sha256 fingerprint must match config review. A stale revision or edited candidate fails without overwriting remote configuration. An unchanged candidate at the reviewed revision writes nothing. Target-only changes require no Worker deployment and take effect through scheduled reconciliation, not an immediate health check.
 
 ${TARGET_DOCUMENT_HELP}
 
@@ -201,6 +245,8 @@ ${OPERATOR_PROFILE_HELP}
 Options:
   -j, --json            Write machine-readable output
   -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -r, --expect-revision <number>   Reviewed nonnegative remote revision
+  -f, --expect-fingerprint <hash>  Reviewed sha256:<64 lower-case hex> candidate
   -h, --help            Show this help
 
 Environment:
@@ -461,6 +507,12 @@ function commandFromPositionals(positionals) {
 }
 
 function validateOptions(command, configPath, options, provided) {
+  if (provided.has("expect-revision") || provided.has("expect-fingerprint")) {
+    if (command !== COMMAND.CONFIG_SYNC) {
+      throw new CliError("Review expectations are valid only with config sync")
+    }
+    validateConfigurationExpectation(options.expectedRevision, options.expectedFingerprint)
+  }
   if (provided.has("json") && !JSON_COMMANDS.has(command)) {
     throw new CliError(`--json is not valid with ${command.replace(".", " ")}`)
   }
@@ -531,6 +583,8 @@ export function parseCliArguments(argv) {
   const options = {
     all: false,
     concurrency: 5,
+    expectedFingerprint: null,
+    expectedRevision: null,
     help: false,
     json: false,
     limit: INCIDENT_LIST_LIMIT.default,
@@ -562,6 +616,8 @@ export function parseCliArguments(argv) {
         provided.add(option)
       } else if ([
         "--concurrency",
+        "--expect-fingerprint",
+        "--expect-revision",
         "--limit",
         "--note",
         "--profile",
@@ -569,7 +625,11 @@ export function parseCliArguments(argv) {
       ].includes(name)) {
         const parsed = optionValue(argv, index, attached, name)
         const option = name.slice(2)
-        options[option === "profile" ? "profilePath" : option] = option === "concurrency"
+        const key = VALUE_OPTION_KEYS[option] ?? option
+        if (option === "expect-revision" && !INTEGER_TEXT_PATTERN.test(parsed.value)) {
+          throw new CliError("--expect-revision must be a nonnegative integer")
+        }
+        options[key] = option === "concurrency" || option === "expect-revision"
           || option === "limit"
             ? Number(parsed.value)
             : parsed.value
@@ -588,16 +648,22 @@ export function parseCliArguments(argv) {
         const option = name === "a" ? "all" : name === "h" ? "help" : "json"
         options[option] = true
         provided.add(option)
-      } else if (["c", "l", "n", "p", "u"].includes(name)) {
+      } else if (["c", "f", "l", "n", "p", "r", "u"].includes(name)) {
         const parsed = optionValue(argv, index, bundle || null, `-${name}`)
         const option = ({
           c: "concurrency",
+          f: "expect-fingerprint",
           l: "limit",
           n: "note",
           p: "profile",
+          r: "expect-revision",
           u: "until",
         })[name]
-        options[option === "profile" ? "profilePath" : option] = option === "concurrency"
+        const key = VALUE_OPTION_KEYS[option] ?? option
+        if (option === "expect-revision" && !INTEGER_TEXT_PATTERN.test(parsed.value)) {
+          throw new CliError("--expect-revision must be a nonnegative integer")
+        }
+        options[key] = option === "concurrency" || option === "expect-revision"
           || option === "limit"
             ? Number(parsed.value)
             : parsed.value
@@ -626,6 +692,9 @@ export function parseCliArguments(argv) {
   }
   const parsed = commandFromPositionals(positionals)
   validateOptions(parsed.command, parsed.configPath, options, provided)
+  if (parsed.command === COMMAND.CONFIG_SYNC) {
+    validateConfigurationExpectation(options.expectedRevision, options.expectedFingerprint)
+  }
   return Object.freeze({
     ...parsed,
     help: false,
@@ -967,33 +1036,51 @@ export async function runCli(argv, overrides = {}) {
     if (INCIDENT_COMMAND_SET.has(parsed.command)) {
       return await runIncidentCommand(parsed, dependencies)
     }
-    const { loaded, profile } = await loadOperatorTarget(
-      parsed.options.profilePath,
-      dependencies,
-    )
+    const profile = await loadOperatorProfile(parsed.options.profilePath, dependencies)
     const wrangler = await loadOperatorWrangler(profile, dependencies)
     const accountId = dependencies.environment.CLOUDFLARE_ACCOUNT_ID
     if (!ACCOUNT_ID_PATTERN.test(accountId || "")) {
       throw new CliError("CLOUDFLARE_ACCOUNT_ID is unavailable or invalid")
     }
-    const rowsWritten = await applyConfiguration(
+    const operator = new CloudflareConfigurationOperator({
+      accountId, apiToken: dependencies.environment.CLOUDFLARE_API_TOKEN,
+      databaseId: monitorDatabaseId(wrangler), fetchImpl: dependencies.fetchImpl,
+    })
+    if (parsed.command === COMMAND.CONFIG_REMOTE) {
+      const remote = await operator.read()
+      if (!remote) throw new CliError("Remote configuration is absent; nothing was exported", EXIT.RUNTIME)
+      writeLine(dependencies.stdout, JSON.stringify(remote.configuration, null, 2))
+      return EXIT.SUCCESS
+    }
+    const loaded = await loadTargetDocument(profile.configPath, dependencies, { privateFile: true })
+    if (parsed.command === COMMAND.CONFIG_REVIEW) {
+      const review = await operator.review(loaded.portable)
+      writeLine(dependencies.stdout, parsed.options.json ? JSON.stringify(review) : [
+        `Remote revision: ${review.expectedRevision}; ${review.remoteTargetCount} target(s)`,
+        `Candidate: ${review.targetCount} target(s); ${review.unchanged ? "unchanged" : "changes proposed"}`,
+        `Added: ${review.addedIds.join(", ") || "none"}`,
+        `Changed: ${review.changedIds.join(", ") || "none"}`,
+        `Removed: ${review.removedIds.join(", ") || "none"}`,
+        `Defaults changed: ${review.defaultsChanged ? "yes" : "no"}`,
+        "Review config show and config remote before importing with:",
+        `  --expect-revision ${review.expectedRevision} --expect-fingerprint ${review.expectedFingerprint}`,
+      ].join("\n"))
+      return EXIT.SUCCESS
+    }
+    const result = await applyConfiguration(
       dependencies.fetchImpl,
       accountId,
       dependencies.environment.CLOUDFLARE_API_TOKEN,
       monitorDatabaseId(wrangler),
       loaded,
       new Date(dependencies.clock()).toISOString(),
+      { expectedRevision: parsed.options.expectedRevision, expectedFingerprint: parsed.options.expectedFingerprint },
     )
-    const result = {
-      configFingerprint: loaded.configFingerprint,
-      rowsWritten,
-      targetCount: loaded.portable.targets.length,
-    }
     writeLine(
       dependencies.stdout,
       parsed.options.json
         ? JSON.stringify(result)
-        : `Synchronized ${result.targetCount} target(s); D1 rows written: ${result.rowsWritten}`,
+        : `Synchronized ${result.targetCount} target(s) at revision ${result.revision}; D1 rows written: ${result.rowsWritten}`,
     )
     return EXIT.SUCCESS
   } catch (error) {

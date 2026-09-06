@@ -34,9 +34,12 @@ class PreparedStatement {
   execute() {
     const statement = this.database.sqlite.prepare(this.sql)
     if (statement.columns().length > 0) {
+      const before = this.database.sqlite.prepare("SELECT total_changes() AS count").get().count
+      const results = statement.all(...this.params)
+      const after = this.database.sqlite.prepare("SELECT total_changes() AS count").get().count
       return {
-        meta: { changes: 0, rows_written: 0 },
-        results: statement.all(...this.params),
+        meta: { changes: after - before, rows_written: after - before },
+        results,
         success: true,
       }
     }
@@ -89,4 +92,20 @@ export function d1Fixture(context) {
   const database = new D1DatabaseFixture()
   context.after(() => database.close())
   return database
+}
+
+export function d1ApiFetch(database, inspect = () => {}) {
+  return async (url, init) => {
+    inspect(url, init)
+    const query = JSON.parse(init.body)
+    const statements = query.batch ?? [query]
+    try {
+      const result = await database.batch(statements.map(({ sql, params = [] }) => (
+        database.prepare(sql).bind(...params)
+      )))
+      return Response.json({ result, success: true })
+    } catch {
+      return Response.json({ result: null, success: false }, { status: 400 })
+    }
+  }
 }

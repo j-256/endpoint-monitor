@@ -26,18 +26,9 @@ import {
   loadStoredConfiguration,
   readRuntimeSettings,
 } from "./runtime-config.mjs"
+import { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 
-export const CLOUDFLARE_RUNTIME_LIMITS = Object.freeze({
-  analyticsIntervalMinutes: 5,
-  deliveredOutboxRetentionDays: 7,
-  externalSubrequests: 45,
-  incidentRetentionDays: 90,
-  maintenanceIntervalMinutes: 60,
-  maximumDeliveriesPerRun: 10,
-  maximumProbesPerRun: 10,
-  probeConcurrency: 5,
-  signalRetentionHours: 24,
-})
+export { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 
 function timestamp(value, code) {
   const milliseconds = value instanceof Date ? value.getTime() : Number(value)
@@ -413,6 +404,7 @@ export async function handleCloudflareRequest(
       analyticsEnabled: settings.analyticsEnabled,
       configuration: loaded.portableConfiguration,
       configurationFingerprint: loaded.configFingerprint,
+      configurationRevision: loaded.revision,
       configurationUpdatedAt: loaded.updatedAt,
       deliveryEnabled: settings.deliveryEnabled,
       enabled: settings.enabled,

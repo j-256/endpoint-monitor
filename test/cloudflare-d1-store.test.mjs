@@ -73,9 +73,12 @@ test("stored configuration is a read-only runtime input", async (context) => {
   assert.deepEqual(await readStoredConfiguration(db), {
     configFingerprint: "sha256:config",
     configJson: '{"schemaVersion":1,"targets":[]}',
+    revision: 1,
     schemaVersion: 1,
     targetCount: 0,
     updatedAt: STARTED_AT,
+    updatedBy: "legacy",
+    updatedWorkspace: "operator",
   })
 })
 

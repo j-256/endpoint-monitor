@@ -4,7 +4,6 @@ import { createRequire } from "node:module"
 import path from "node:path"
 
 import {
-  applyConfiguration,
   runConfigure,
 } from "../../../scripts/configure-cloudflare.mjs"
 import {
@@ -12,6 +11,7 @@ import {
   loadOperatorProfile,
   loadOperatorTarget,
   loadOperatorWrangler,
+  loadTargetDocument,
   monitorDatabaseId,
   monitorDatabaseName,
   monitorWorkerName,
@@ -20,6 +20,8 @@ import {
   PACKAGE_MIGRATIONS_PATH,
   PACKAGE_WORKER_PATH,
 } from "../../project.mjs"
+import { configurationCandidate } from "./configuration-authority.mjs"
+import { CloudflareConfigurationOperator } from "./operator-configuration.mjs"
 
 const require = createRequire(import.meta.url)
 const ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/
@@ -240,9 +242,7 @@ export function parseBootstrapArguments(argv) {
 export function deployUsage() {
   return `Usage: endpoint-monitor deploy [options]
 
-Deploy the Worker and migrations bundled with this package version. A live run
-applies pending migrations, synchronizes the active target document, deploys
-the Worker, and verifies its workers.dev health endpoint.
+Deploy the Worker and migrations bundled with this package version. A live run applies pending migrations, preserves any existing remote target configuration, deploys the Worker, and verifies its workers.dev health endpoint. Only an absent configuration is initialized from the validated local candidate. Later target changes require config review and an explicit config sync; deployment never overwrites online edits.
 
 Options:
   -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
@@ -738,10 +738,7 @@ export async function runDeploy(argv, overrides = {}) {
   }
   try {
     const operatorDeps = operatorOverrides(dependencies)
-    const { loaded, profile } = await loadOperatorTarget(
-      options.profilePath,
-      operatorDeps,
-    )
+    const profile = await loadOperatorProfile(options.profilePath, operatorDeps)
     const wrangler = await loadOperatorWrangler(profile, operatorDeps)
     validatePackageResolvedWrangler(wrangler)
     const databaseId = monitorDatabaseId(wrangler)
@@ -757,7 +754,7 @@ export async function runDeploy(argv, overrides = {}) {
       ], cwd, dependencies)
       writeLine(
         dependencies.stdout,
-        `Deployment dry run passed for ${workerName} with ${loaded.portable.targets.length} target(s)`,
+        `Deployment dry run passed for ${workerName}; remote configuration is not read or changed`,
       )
       return EXIT.SUCCESS
     }
@@ -771,14 +768,23 @@ export async function runDeploy(argv, overrides = {}) {
       "--config",
       profile.wranglerPath,
     ], cwd, dependencies)
-    const rowsWritten = await applyConfiguration(
-      dependencies.fetchImpl,
-      credentials.accountId,
-      credentials.apiToken,
-      databaseId,
-      loaded,
-      new Date(dependencies.clock()).toISOString(),
-    )
+    const operator = new CloudflareConfigurationOperator({
+      ...credentials, databaseId, fetchImpl: dependencies.fetchImpl,
+    })
+    let configuration = await operator.read()
+    let rowsWritten = 0
+    const initialized = configuration === null
+    if (initialized) {
+      const loaded = await loadTargetDocument(profile.configPath, operatorDeps, { privateFile: true })
+      const candidate = await configurationCandidate(loaded.portable)
+      configuration = await operator.write(candidate.portable, {
+        expectedRevision: 0,
+        expectedFingerprint: candidate.configFingerprint,
+        updatedAt: new Date(dependencies.clock()).toISOString(),
+        updatedBy: "deployment-initialization",
+      })
+      rowsWritten = configuration.rowsWritten
+    }
     await runWrangler([
       "deploy",
       "--config",
@@ -796,7 +802,7 @@ export async function runDeploy(argv, overrides = {}) {
     )
     writeLine(
       dependencies.stdout,
-      `Deployed ${workerName} with ${loaded.portable.targets.length} target(s); D1 rows written: ${rowsWritten}; health: ${healthUrl}`,
+      `Deployed ${workerName}; remote configuration ${initialized ? "initialized" : "preserved"} (inspected revision ${configuration.revision}, ${configuration.targetCount} target(s)); D1 rows written: ${rowsWritten}; health: ${healthUrl}`,
     )
     return EXIT.SUCCESS
   } catch (error) {

@@ -64,11 +64,13 @@ Clearing state makes dismissal non-suppressive: a continuing ordinary failure mu
 
 `@j-256/endpoint-monitor` is one deployable service package rather than two independently versioned products. The package-local `endpoint-monitor` executable controls an operator project, while absolute paths in the generated Wrangler configuration bind deployment to the Worker source and migrations from that exact package installation. Wrangler is a pinned production dependency because deployment is a supported installed-package operation.
 
-Initialization is local-only. Bootstrap owns resource creation or adoption, private configuration generation, and migrations. Deploy owns migration reconciliation, target synchronization, Worker publication, and public health verification. Dry-run forms preserve those phase boundaries without provider or durable writes.
+Initialization is local-only. Bootstrap owns resource creation or adoption, private configuration generation, and migrations. Deploy owns migration reconciliation, initialization of an absent target configuration, Worker publication, and public health verification. It preserves existing online configuration without reading a local candidate. Dry-run forms preserve those phase boundaries without provider or durable writes.
 
 An upgrade replaces the package version, reruns bootstrap to point private configuration at the new immutable assets, checks `deploy --dry-run`, and deploys. A controller from one version cannot silently publish Worker assets from another version because deploy rejects a Wrangler configuration whose Worker or migration paths do not resolve to its own package.
 
 ## Configuration changes
+
+D1 owns the executing document. The Cloudflare configuration authority is shared by operator imports and management adapters, using the same portable domain validation and schedule ceiling. A reviewed write matches both an exact candidate fingerprint and the monotonic remote revision. Database guards reject legacy writers and revision-resetting replacement or deletion. An accepted change atomically advances its revision and appends a bounded metadata-only audit entry. An unchanged document at the reviewed revision is read-only. The local operator profile selects an import candidate and provider binding, not a competing authority.
 
 Changing any target field changes its fingerprint. On the next scheduled invocation, the adapter resolves an open incident as `configuration-changed`, clears its sparse state, and emits no misleading recovery event. Removing a target behaves the same way with `configuration-removed`.
 
