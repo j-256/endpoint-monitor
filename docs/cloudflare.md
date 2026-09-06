@@ -42,8 +42,11 @@ Public routing can re-enter a Worker. Do not configure this Endpoint Monitor Wor
 | Cloudflare analytics | `CLOUDFLARE_ANALYTICS_ENABLED`, `CLOUDFLARE_ACCOUNT_ID` | `CLOUDFLARE_API_TOKEN` |
 | Hookrelay delivery | `ENDPOINT_MONITOR_DELIVERY_ENABLED` | `ENDPOINT_MONITOR_HOOKRELAY_URL`, `ENDPOINT_MONITOR_HOOKRELAY_HMAC`, optional `HOOKRELAY` service binding |
 | Protected status | `ENDPOINT_MONITOR_STATUS_ENABLED` | `ENDPOINT_MONITOR_STATUS_TOKEN` |
+| Protected management | No public feature flag | `MONITOR_DB`, `MANAGEMENT_CREDENTIALS` digest catalog |
 
 Flags accept only `true` and `false`. An enabled feature with a missing required binding fails closed with a fixed configuration code.
+
+The [management contract](management.md) remains independently authorized even through a service binding. It never accepts the status token or account-level deployment token. Apply the additive management migration before enabling credentials. Existing targets, incidents, feature selections, and outbox rows are preserved. Keep a protected database export and the prior Worker artifact before migration and deployment; rolling back code must not remove configuration revision guards or overwrite online edits. Keep credential identity and revision available until accepted receipts have been reconciled.
 
 ## Shadow verification
 
@@ -73,6 +76,7 @@ The example enables Workers Logs and invocation logs. Platform invocation record
 | `endpoint_monitor.phase_error` | Error | Optional analytics phase failed |
 | `endpoint_monitor.delivery_failed` | Error | One outbox attempt failed |
 | `endpoint_monitor.runtime_error` | Error | Critical scheduled invocation failure |
+| `endpoint_monitor.management_failed` | Warning | Fixed management failure requiring availability or receipt inspection |
 
 The run summary includes scheduled time, configured and due target counts, probe outcomes, analytics row and match counts, transition count, D1 row writes, delivery outcomes, retention count, phase errors, and budgeted subrequests. It intentionally excludes full URLs and raw exception text.
 
@@ -80,7 +84,7 @@ Use the Worker name as the primary Observability filter, then filter the structu
 
 ## D1 inspection
 
-The protected status API is the preferred operational view. For direct database inspection, query only the narrow tables needed and avoid selecting `config_json`, `target_url`, or `event_json` into shared logs.
+The protected management API supplies bounded operational reads; the optional status API remains available to existing operators. For direct database inspection, query only the narrow tables needed and avoid selecting `config_json`, `target_url`, `event_json`, management inputs, previews, or notes into shared logs.
 
 The operator CLI provides the authenticated incident view without enabling protected HTTP status:
 

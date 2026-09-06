@@ -48,7 +48,7 @@ Provider enrichment is optional. It must filter to configured targets, validate 
 
 ## Cloudflare adapter
 
-The Cloudflare adapter stores configuration, sparse state, incidents, immutable triage actions, provider-signal fingerprints, and an outbox in D1. A scheduled Worker runs probe, optional analytics, delivery, and hourly maintenance phases under one outbound budget. The operator CLI uses Cloudflare's authenticated D1 API for triage, while the Worker exposes no incident mutation routes.
+The Cloudflare adapter stores configuration, sparse state, incidents, immutable triage actions, provider-signal fingerprints, and an outbox in D1. A scheduled Worker runs probe, optional analytics, delivery, and hourly maintenance phases under one outbound budget. The operator CLI uses Cloudflare's authenticated D1 API. The Worker offers a versioned management contract protected by dedicated workspace-allowlisted machine credentials, independent of optional status authentication. Both management paths share configuration validation and triage statement builders.
 
 Cloudflare analytics queries only selected failure statuses for configured hostnames with `requestSource: "eyeball"`. A result is accepted only when its zone belongs to the configured account and its hostname and path exactly match a configured target. Targets with query strings receive active probes but no analytics enrichment because the dataset exposes path separately from query.
 
@@ -57,6 +57,8 @@ Delivery can use a Hookrelay service binding or direct public HTTPS. Both paths 
 ## Operator triage
 
 Acknowledgement and snooze append immutable actions without altering incident health. Snooze also delays a pending problem delivery. Dismissal uses a transactional D1 batch to append its action, resolve the incident, clear only state tied to that incident, and create a resolved delivery row when a problem row exists. Operational readers derive the `operator-dismissed` reason from the action because the original incident-table constraint contains only automatic resolution reasons.
+
+Incident and action mutations advance an incident revision, including actions originating in the CLI. Management reviews bind the actor, workspace, credential identity and revision, exact normalized action, incident revision, and executing configuration revision. Accepting the review and applying the shared domain statements happen in one database transaction. A unique acceptance identity gates the domain effects, so concurrent submissions cannot apply the same plan twice. Configuration management uses the same receipt protocol and the shared revision-authority statement builder. Accepted receipts retain the result after the reviewed input is discarded, allowing transport uncertainty to be reconciled without repeating effects.
 
 Clearing state makes dismissal non-suppressive: a continuing ordinary failure must cross its threshold again, while a configured immediate failure can reopen on the next probe. Removing or changing a target remains the durable way to retire or correct a monitoring contract.
 
@@ -73,6 +75,8 @@ An upgrade replaces the package version, reruns bootstrap to point private confi
 D1 owns the executing document. The Cloudflare configuration authority is shared by operator imports and management adapters, using the same portable domain validation and schedule ceiling. A reviewed write matches both an exact candidate fingerprint and the monotonic remote revision. Database guards reject legacy writers and revision-resetting replacement or deletion. An accepted change atomically advances its revision and appends a bounded metadata-only audit entry. An unchanged document at the reviewed revision is read-only. The local operator profile selects an import candidate and provider binding, not a competing authority.
 
 Changing any target field changes its fingerprint. On the next scheduled invocation, the adapter resolves an open incident as `configuration-changed`, clears its sparse state, and emits no misleading recovery event. Removing a target behaves the same way with `configuration-removed`.
+
+Saving configuration does not cancel an in-flight probe invocation or prove the new endpoint healthy. An invocation already holding the previous configuration can finish against it; subsequent scheduled reconciliation adopts the executing revision. Management target reads label exceptional evidence from another configuration as changed rather than reporting it as current health.
 
 An incident opened with delivery disabled has no outbox row. When delivery is enabled, the adapter creates the missing problem event for every still-open incident before normal delivery. Incidents that opened and recovered entirely in shadow mode stay historical and do not alert retroactively.
 

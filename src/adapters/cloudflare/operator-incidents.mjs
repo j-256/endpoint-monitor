@@ -18,6 +18,7 @@ export const INCIDENT_LIST_LIMIT = Object.freeze({
   minimum: 1,
 })
 export const MAXIMUM_INCIDENT_NOTE_BYTES = 1024
+export const INCIDENT_HISTORY_LIMIT = 100
 
 const INCIDENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/
 const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/
@@ -47,7 +48,8 @@ const READ_ACTIONS_SQL = `
   SELECT id, incident_id, action, note, snoozed_until, created_at
   FROM monitor_incident_action
   WHERE incident_id = ?
-  ORDER BY created_at, id
+  ORDER BY created_at DESC, id DESC
+  LIMIT ${INCIDENT_HISTORY_LIMIT + 1}
 `
 const INSERT_ACTION_SQL = `
   INSERT INTO monitor_incident_action (
@@ -178,11 +180,42 @@ function actionFromRow(row) {
   })
 }
 
-function incidentRecord(incident, actions = []) {
+function incidentRecord(incident, actions = [], historyTruncated = false) {
   return Object.freeze({
     ...incident,
     actions: Object.freeze(actions),
+    historyTruncated,
   })
+}
+
+export function normalizeIncidentAction(action, { note = null, until = null } = {}, now) {
+  if (!Object.values(INCIDENT_ACTION).includes(action)) throw new TypeError("Incident action is invalid")
+  if (action !== INCIDENT_ACTION.SNOOZED && until !== null) throw new TypeError("Only snooze accepts a deadline")
+  return { action, note: incidentNote(note),
+    until: action === INCIDENT_ACTION.SNOOZED ? futureTimestamp(until, now) : null }
+}
+
+export function incidentActionStatements(incident, input, createdAt, actionId, guard = null) {
+  const id = incidentId(incident.id)
+  const normalized = normalizeIncidentAction(input.action, input, createdAt)
+  const statements = [{
+    sql: INSERT_ACTION_SQL + (guard ? ` AND (${guard.sql})` : ""),
+    params: [actionId, normalized.action, normalized.note || "", normalized.until || "", createdAt, id,
+      ...(guard?.params ?? [])],
+  }]
+  if (normalized.action === INCIDENT_ACTION.SNOOZED) {
+    statements.push({ sql: DELAY_OPEN_DELIVERY_SQL, params: [normalized.until, normalized.until, id, actionId] })
+  }
+  if (normalized.action === INCIDENT_ACTION.DISMISSED) {
+    const event = createIncidentCloudEvent(dismissIncident(incident, createdAt), TRANSITION.RESOLVED)
+    statements.push(
+      { sql: DISMISS_INCIDENT_SQL, params: [createdAt, id, actionId] },
+      { sql: CLEAR_INCIDENT_STATE_SQL, params: [id, actionId] },
+      { sql: INSERT_RESOLVED_OUTBOX_SQL,
+        params: [event.id, id, JSON.stringify(event), createdAt, createdAt, actionId, id] },
+    )
+  }
+  return statements
 }
 
 export class CloudflareIncidentOperator {
@@ -192,12 +225,14 @@ export class CloudflareIncidentOperator {
     clock = Date.now,
     databaseId,
     fetchImpl = globalThis.fetch,
+    queryImpl = null,
     randomUUID = () => crypto.randomUUID(),
   }) {
     if (typeof clock !== "function" || typeof randomUUID !== "function") {
       throw new TypeError("Incident operator dependencies are invalid")
     }
-    this.api = new CloudflareApi({ accountId, apiToken, fetchImpl })
+    this.api = queryImpl ? null : new CloudflareApi({ accountId, apiToken, fetchImpl })
+    this.queryImpl = queryImpl
     this.clock = clock
     this.databaseId = databaseId
     this.randomUUID = randomUUID
@@ -214,6 +249,7 @@ export class CloudflareIncidentOperator {
   async query(queries) {
     const batch = Array.isArray(queries) ? queries : [queries]
     try {
+      if (this.queryImpl) return await this.queryImpl(batch)
       return await this.api.queryD1(
         this.databaseId,
         batch.length === 1 ? batch[0] : { batch },
@@ -266,7 +302,8 @@ export class CloudflareIncidentOperator {
     }
     return incidentRecord(
       incident,
-      resultRows(actionResult).map(actionFromRow),
+      resultRows(actionResult).slice(0, INCIDENT_HISTORY_LIMIT).map(actionFromRow).reverse(),
+      resultRows(actionResult).length > INCIDENT_HISTORY_LIMIT,
     )
   }
 
@@ -281,97 +318,24 @@ export class CloudflareIncidentOperator {
     return incident
   }
 
-  async appendAction(value, action, { note = null, snoozedUntil = null } = {}) {
-    const id = incidentId(value)
-    const normalizedNote = incidentNote(note)
+  async perform(value, action, options = {}) {
+    const open = await this.requireOpen(value)
     const actionId = this.randomUUID()
     const createdAt = this.timestamp()
-    const [result] = await this.query({
-      params: [
-        actionId,
-        action,
-        normalizedNote || "",
-        snoozedUntil || "",
-        createdAt,
-        id,
-      ],
-      sql: INSERT_ACTION_SQL,
-    })
-    if (changedRows(result) !== 1) await this.mutationFailed(id)
-    return Object.freeze({ actionId, createdAt, id })
+    const [result] = await this.query(incidentActionStatements(open, { ...options, action }, createdAt, actionId))
+    if (changedRows(result) !== 1) await this.mutationFailed(open.id)
+    return this.show(open.id)
   }
 
   async acknowledge(value, { note = null } = {}) {
-    const appended = await this.appendAction(
-      value,
-      INCIDENT_ACTION.ACKNOWLEDGED,
-      { note },
-    )
-    return this.show(appended.id)
+    return this.perform(value, INCIDENT_ACTION.ACKNOWLEDGED, { note })
   }
 
   async snooze(value, { note = null, until } = {}) {
-    const id = incidentId(value)
-    const now = this.timestamp()
-    const normalizedNote = incidentNote(note)
-    const snoozedUntil = futureTimestamp(until, now)
-    const actionId = this.randomUUID()
-    const [actionResult] = await this.query([{
-      params: [
-        actionId,
-        INCIDENT_ACTION.SNOOZED,
-        normalizedNote || "",
-        snoozedUntil,
-        now,
-        id,
-      ],
-      sql: INSERT_ACTION_SQL,
-    }, {
-      params: [snoozedUntil, snoozedUntil, id, actionId],
-      sql: DELAY_OPEN_DELIVERY_SQL,
-    }])
-    if (changedRows(actionResult) !== 1) await this.mutationFailed(id)
-    return this.show(id)
+    return this.perform(value, INCIDENT_ACTION.SNOOZED, { note, until })
   }
 
   async dismiss(value, { note = null } = {}) {
-    const open = await this.requireOpen(value)
-    const normalizedNote = incidentNote(note)
-    const dismissedAt = this.timestamp()
-    const dismissed = dismissIncident(open, dismissedAt)
-    const event = createIncidentCloudEvent(dismissed, TRANSITION.RESOLVED)
-    const actionId = this.randomUUID()
-    const [actionResult, incidentResult] = await this.query([{
-      params: [
-        actionId,
-        INCIDENT_ACTION.DISMISSED,
-        normalizedNote || "",
-        "",
-        dismissedAt,
-        open.id,
-      ],
-      sql: INSERT_ACTION_SQL,
-    }, {
-      params: [dismissedAt, open.id, actionId],
-      sql: DISMISS_INCIDENT_SQL,
-    }, {
-      params: [open.id, actionId],
-      sql: CLEAR_INCIDENT_STATE_SQL,
-    }, {
-      params: [
-        event.id,
-        open.id,
-        JSON.stringify(event),
-        dismissedAt,
-        dismissedAt,
-        actionId,
-        open.id,
-      ],
-      sql: INSERT_RESOLVED_OUTBOX_SQL,
-    }])
-    if (changedRows(actionResult) !== 1 || changedRows(incidentResult) !== 1) {
-      await this.mutationFailed(open.id)
-    }
-    return this.show(open.id)
+    return this.perform(value, INCIDENT_ACTION.DISMISSED, { note })
   }
 }

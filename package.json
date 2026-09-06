@@ -30,6 +30,7 @@
     "CHANGELOG.md",
     "docs/architecture.md",
     "docs/cloudflare.md",
+    "docs/management.md",
     "docs/releases.md",
     "endpoint-monitor.example.json",
     "migrations/",

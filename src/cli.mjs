@@ -318,7 +318,8 @@ ${INCIDENT_READ_ENVIRONMENT_HELP}
 `
   if (key === "incidents show") return `Usage: endpoint-monitor incidents show <incident-id> [--json] [--profile <path>]
 
-Show one incident and its ordered acknowledgement, snooze, and dismissal history.
+Show one incident and its latest bounded acknowledgement, snooze, and dismissal history.
+Truncated history is marked; the management API supports paging older actions.
 
 ${OPERATOR_PROFILE_HELP}
 
@@ -820,6 +821,7 @@ function textIncident(incident) {
     ].join("\t"))
   }
   lines.push(`${incident.actions.length} action(s)`)
+  if (incident.historyTruncated) lines.push("Earlier actions omitted; use management history pagination")
   return lines.join("\n")
 }
 

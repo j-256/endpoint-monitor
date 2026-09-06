@@ -145,12 +145,13 @@ export async function reviewConfiguration(query, candidate) {
   })
 }
 
-export async function writeConfigurationAuthority(query, candidate, {
+export async function prepareConfigurationWrite(query, candidate, {
   expectedFingerprint,
   expectedRevision,
   updatedAt,
   updatedBy = "operator-cli",
   updatedWorkspace = "operator",
+  guard = null,
 }) {
   validateConfigurationExpectation(expectedRevision, expectedFingerprint)
   const loaded = await configurationCandidate(candidate)
@@ -172,21 +173,33 @@ export async function writeConfigurationAuthority(query, candidate, {
   if ((before?.revision ?? 0) !== expectedRevision) throw conflict()
   if (before?.configFingerprint === loaded.configFingerprint) {
     const { configuration: _configuration, ...result } = before
-    return Object.freeze({ ...result, changed: false, rowsWritten: 0 })
+    return { result: Object.freeze({ ...result, changed: false, rowsWritten: 0 }), statement: null }
   }
   const params = [
     loaded.portable.schemaVersion, loaded.configJson, loaded.configFingerprint,
     loaded.portable.targets.length, updatedAt, updatedBy, updatedWorkspace,
   ]
   if (expectedRevision > 0) params.push(expectedRevision, loaded.configFingerprint)
-  const [result] = await query({
-    sql: expectedRevision === 0 ? INSERT_SQL : UPDATE_SQL,
-    params,
-  })
+  return {
+    statement: {
+      sql: guard
+        ? (expectedRevision === 0 ? INSERT_SQL : UPDATE_SQL).replace("RETURNING", `AND (${guard.sql})\nRETURNING`)
+        : expectedRevision === 0 ? INSERT_SQL : UPDATE_SQL,
+      params: [...params, ...(guard?.params ?? [])],
+    },
+    result: { revision: expectedRevision + 1, configFingerprint: expectedFingerprint,
+      targetCount: loaded.portable.targets.length, updatedAt, updatedBy, updatedWorkspace, changed: true },
+  }
+}
+
+export async function writeConfigurationAuthority(query, candidate, options) {
+  const prepared = await prepareConfigurationWrite(query, candidate, options)
+  if (!prepared.statement) return prepared.result
+  const [result] = await query(prepared.statement)
   const row = result?.results?.[0]
   if (!row) throw conflict()
-  if (result.results.length !== 1 || row.revision !== expectedRevision + 1
-    || row.config_fingerprint !== expectedFingerprint) {
+  if (result.results.length !== 1 || row.revision !== prepared.result.revision
+    || row.config_fingerprint !== prepared.result.configFingerprint) {
     throw new ConfigurationAuthorityError(
       "configuration-outcome-unknown",
       "Configuration outcome is unverified. Inspect config remote before making another change.",

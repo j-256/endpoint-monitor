@@ -22,7 +22,8 @@ test("configuration authority and migration run inside workerd with real D1 bind
       configurationCandidate, d1ConfigurationQuery, readConfigurationAuthority,
       reviewConfiguration, writeConfigurationAuthority,
     } from "./src/adapters/cloudflare/configuration-authority.mjs"
-    import { runCloudflareScheduled } from "./src/adapters/cloudflare/runtime.mjs"
+    import { runCloudflareScheduled, handleCloudflareRequest } from "./src/adapters/cloudflare/runtime.mjs"
+    import { sha256Hex } from "./src/crypto.mjs"
     export default { async fetch(request, env) {
       const db = env.MONITOR_DB
       for (const migration of ${JSON.stringify(migrations)}) await db.exec(migration)
@@ -63,9 +64,60 @@ test("configuration authority and migration run inside workerd with real D1 bind
           logger: { log() {}, warn() {}, error() {} },
         })
       const audit = await db.prepare("SELECT COUNT(*) AS count FROM monitor_configuration_change").first()
+      const token = "epm_" + "a".repeat(43)
+      const managementEnv = { MONITOR_DB: db, MANAGEMENT_CREDENTIALS: JSON.stringify([{
+        id: "example-hq", revision: 1, tokenHash: await sha256Hex(token),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(), workspaceIds: ["example-workspace"],
+        capabilities: ["read", "configure", "triage"],
+      }]) }
+      async function management(command, input = {}, clock = Date.now) {
+        const response = await handleCloudflareRequest(new Request("https://example.com/admin/api/v1", {
+          method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token },
+          body: JSON.stringify({ version: 1, command, input: { workspaceId: "example-workspace", ...input } }),
+        }), managementEnv, { clock })
+        const body = await response.json()
+        return { status: response.status, result: body.result, error: body.error }
+      }
+      const managedPlan = await management("configuration_plan", {
+        actorId: "example-operator", expectedRevision: 2,
+        configuration: { ...next, targets: [{id:"example-health",url:"https://example.com/managed"}] },
+      })
+      const applied = await Promise.all([0,1].map(() => management("operation_apply", {
+        actorId: "example-operator", planId: managedPlan.result.id,
+      })))
+      const failure = await runCloudflareScheduled({ MONITOR_DB: db, ENDPOINT_MONITOR_ENABLED: true },
+        Date.parse("2026-09-06T03:22:00.000Z"), {
+          clock: () => Date.parse("2026-09-06T03:22:00.000Z"),
+          fetchImpl: async () => new Response(null, { status: 520 }),
+          logger: { log() {}, warn() {}, error() {} },
+        })
+      const incidents = await management("incidents")
+      const triagePlan = await management("triage_plan", {
+        actorId: "example-operator", incidentId: incidents.result.items[0].id,
+        expectedRevision: incidents.result.items[0].revision, action: "dismissed",
+      })
+      await db.exec("CREATE TRIGGER reject_action BEFORE INSERT ON monitor_incident_action BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
+      const failedAction = await management("operation_apply", { actorId: "example-operator", planId: triagePlan.result.id })
+      const unapplied = await management("operation_get", { actorId: "example-operator", planId: triagePlan.result.id })
+      await db.exec("DROP TRIGGER reject_action;")
+      const triaged = await management("operation_apply", { actorId: "example-operator", planId: triagePlan.result.id })
+      const managedIncident = await management("incident", { incidentId: incidents.result.items[0].id })
+      const delayedPlan = await management("configuration_plan", {
+        actorId: "example-operator", expectedRevision: 3,
+        configuration: { ...next, targets: [{id:"example-health",url:"https://example.com/delayed"}] },
+      })
+      const databaseExpiredAt = new Date(Date.now() - 60000).toISOString()
+      await db.prepare("UPDATE monitor_management_operation SET expires_at=? WHERE id=?")
+        .bind(databaseExpiredAt, delayedPlan.result.id).run()
+      const delayedApply = await management("operation_apply", {
+        actorId: "example-operator", planId: delayedPlan.result.id,
+      }, () => Date.now() - 120000)
+      const afterDelayed = await readConfigurationAuthority(query)
       return Response.json({ initial, updated, unchanged, staleRejected, legacyRejected,
         rolledBack, finalRevision: remote.revision, auditCount: audit.count,
-        healthyProbeWrites: probe.d1Writes, succeededProbes: probe.succeededProbes })
+        healthyProbeWrites: probe.d1Writes, succeededProbes: probe.succeededProbes,
+        management: { applied, failureTransitions: failure.transitions, failedAction, unapplied, triaged, managedIncident,
+          delayedApply, afterDelayedRevision: afterDelayed.revision } })
     } }
   `
   const bundle = await build({
@@ -91,4 +143,15 @@ test("configuration authority and migration run inside workerd with real D1 bind
   assert.equal(result.auditCount, 2)
   assert.equal(result.healthyProbeWrites, 0)
   assert.equal(result.succeededProbes, 1)
+  assert.equal(result.management.applied[0].status, 200)
+  assert.deepEqual(result.management.applied[0], result.management.applied[1])
+  assert.equal(result.management.applied[0].result.result.revision, 3)
+  assert.equal(result.management.failureTransitions, 1)
+  assert.equal(result.management.failedAction.status, 503)
+  assert.equal(result.management.unapplied.result.status, "reviewed")
+  assert.equal(result.management.triaged.result.status, "applied")
+  assert.equal(result.management.managedIncident.result.incident.resolutionReason, "operator-dismissed")
+  assert.equal(result.management.managedIncident.result.actions.length, 1)
+  assert.equal(result.management.delayedApply.status, 409)
+  assert.equal(result.management.afterDelayedRevision, 3)
 })

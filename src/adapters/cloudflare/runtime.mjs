@@ -27,6 +27,8 @@ import {
   readRuntimeSettings,
 } from "./runtime-config.mjs"
 import { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
+import { handleManagement } from "./management.mjs"
+import { MANAGEMENT_PATH } from "./management-contract.mjs"
 
 export { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 
@@ -352,6 +354,7 @@ export async function handleCloudflareRequest(
   { clock = Date.now } = {},
 ) {
   const url = new URL(request.url)
+  if (url.pathname === MANAGEMENT_PATH) return handleManagement(request, env, { clock })
   if (!["GET", "HEAD"].includes(request.method)) {
     return responseBody(
       { error: "method-not-allowed" },

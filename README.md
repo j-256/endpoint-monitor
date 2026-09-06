@@ -8,7 +8,7 @@ The monitoring core is runtime-neutral JavaScript. The included Cloudflare Worke
 
 ## Why explicit targets
 
-Traffic, DNS inventory, and provider metadata do not define what should be monitored. They can include retired hosts, external fetch destinations, alternate routes, and hostnames whose useful path is not `/`. Endpoint Monitor therefore treats the configuration file as the only enrollment authority. Provider data may corroborate a configured target but cannot add one.
+Traffic, DNS inventory, and provider metadata do not define what should be monitored. They can include retired hosts, external fetch destinations, alternate routes, and hostnames whose useful path is not `/`. Endpoint Monitor therefore treats its explicit configuration as the only enrollment authority. Provider data may corroborate a configured target but cannot add one. On Cloudflare, D1 owns that configuration; local documents are import candidates.
 
 ## Installation
 
@@ -100,7 +100,7 @@ From a source checkout, run `npm ci` and substitute `node src/cli.mjs` for `npm 
 
 `method` is `GET` or `HEAD`. Redirects are not followed, so the configured host and route are what the probe verifies. `failureThreshold`, `recoveryThreshold`, and `timeoutMilliseconds` may be overridden per target.
 
-By default, any response below HTTP 500 proves reachability. HTTP 520 through 526 and 530 open an incident immediately; other server responses and network failures use `failureThreshold`. Supply `expectedStatuses` only when the endpoint has a narrower application contract. Only successful active probes can resolve an incident.
+By default, any response below HTTP 500 proves reachability. HTTP 520 through 526 and 530 open an incident immediately; other server responses and network failures use `failureThreshold`. Supply `expectedStatuses` only when the endpoint has a narrower application contract. Only successful active probes establish observed recovery; operator dismissal and configuration changes have distinct resolution reasons.
 
 Schema version 1 remains accepted for status-only documents. Schema version 2 adds the optional `expect` object:
 
@@ -112,6 +112,8 @@ Schema version 1 remains accepted for status-only documents. Schema version 2 ad
 Location validation requires explicit 3xx `expectedStatuses`. Body validation requires `GET`. Status is checked before other expectations. Text markers are searched within at most the first 64 KiB and stop the read as soon as they match; JSON validation requires a complete body within that limit. Read content is discarded immediately and never included in diagnostics. A failed expectation records the observed HTTP status plus a fixed error code and follows the configured failure threshold.
 
 ## Cloudflare deployment
+
+Online operator applications can use the [protected management API](docs/management.md) for paginated targets, incidents, and action history, plus reviewed configuration edits and triage. It uses dedicated expiring workspace-allowlisted credentials with separate read, configure, and triage capabilities. Its operations share the CLI's configuration authority and triage implementation; no local server is required for management. A read does not trigger probes, and an absent incident is not reported as verified health.
 
 The Cloudflare adapter uses one Cron trigger per minute. A stable hash distributes targets across `probeIntervalMinutes`, with at most 10 probes and five concurrent outbound connections per invocation. Configuration that cannot satisfy that cadence is rejected rather than silently probed less often. The adapter also enforces a 45-external-subrequest budget and uses manual redirects. Review the [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before deploying on a different plan or after changing these bounds.
 

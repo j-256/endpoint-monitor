@@ -11,6 +11,7 @@ import {
 import { runCli } from "../src/cli.mjs"
 import { httpObservation } from "../src/core.mjs"
 import { d1Fixture } from "./d1.fixture.mjs"
+import { INCIDENT_HISTORY_LIMIT } from "../src/adapters/cloudflare/operator-incidents.mjs"
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef"
 const DATABASE_ID = "01234567-89ab-cdef-0123-456789abcdef"
@@ -131,6 +132,24 @@ function commandRunner(db) {
     },
   }
 }
+
+test("incident CLI marks bounded history while retaining the latest actions in order", async (context) => {
+  const db = d1Fixture(context)
+  await openIncident(db, target())
+  for (let index = 0; index <= INCIDENT_HISTORY_LIMIT; index += 1) {
+    db.sqlite.prepare("INSERT INTO monitor_incident_action (id, incident_id, action, created_at) VALUES (?, 'incident-one', 'acknowledged', ?)")
+      .run(`action-${String(index).padStart(3, "0")}`, OPENED_AT)
+  }
+  const commands = commandRunner(db)
+  const shown = await commands.run(["incidents", "show", "incident-one", "-jp", PROFILE_PATH])
+  assert.equal(shown.status, 0, shown.stderr)
+  const body = JSON.parse(shown.stdout).incident
+  assert.equal(body.historyTruncated, true)
+  assert.equal(body.actions.length, INCIDENT_HISTORY_LIMIT)
+  assert.equal(body.actions[0].id, "action-001")
+  const text = await commands.run(["incidents", "show", "incident-one", "-p", PROFILE_PATH])
+  assert.match(text.stdout, /Earlier actions omitted/)
+})
 
 test("incident CLI lists, shows, acknowledges, snoozes, and dismisses", async (context) => {
   const db = d1Fixture(context)
