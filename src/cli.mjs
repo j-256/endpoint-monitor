@@ -58,6 +58,7 @@ const COMMAND = Object.freeze({
   INCIDENTS_SNOOZE: "incidents.snooze",
   INIT: "init",
   PROBE: "probe",
+  STATUS: "status",
   TARGETS: "targets",
 })
 const CONFIG_COMMANDS = new Map([
@@ -98,6 +99,7 @@ const HELP_ROUTES = new Set([
   "incidents show",
   "incidents snooze",
   "probe",
+  "status",
   "targets",
 ])
 const JSON_COMMANDS = new Set([
@@ -111,6 +113,7 @@ const JSON_COMMANDS = new Set([
   COMMAND.INCIDENTS_SHOW,
   COMMAND.INCIDENTS_SNOOZE,
   COMMAND.PROBE,
+  COMMAND.STATUS,
   COMMAND.TARGETS,
 ])
 const MAXIMUM_CLI_CONCURRENCY = 20
@@ -133,6 +136,7 @@ const PROFILE_COMMANDS = new Set([
   COMMAND.INCIDENTS_SHOW,
   COMMAND.INCIDENTS_SNOOZE,
   COMMAND.PROBE,
+  COMMAND.STATUS,
   COMMAND.TARGETS,
 ])
 const OPERATOR_PROFILE_HELP = "The mode-0600 operator profile is initialized by endpoint-monitor init, updated by Cloudflare configuration, and names the active target document and generated Wrangler configuration."
@@ -155,6 +159,24 @@ function help(route = []) {
   const key = route.join(" ")
   if (key === "init") return initUsage()
   if (key === "deploy") return deployUsage()
+  if (key === "status") return `Usage: endpoint-monitor status [--json] [--profile <path>]
+
+Read bounded scheduler completion and configuration-bound target checks from D1 without contacting targets or reading the local target candidate. A pass is evidence of the recorded check, not continuous uptime. Stale or absent evidence is not healthy. Times are UTC.
+
+${OPERATOR_PROFILE_HELP}
+
+Options:
+  -j, --json            Write machine-readable output
+  -p, --profile <path>  Operator profile (default: .endpoint-monitor.local.json)
+  -h, --help            Show this help
+
+${INCIDENT_READ_ENVIRONMENT_HELP}
+
+Exit status:
+  0  Status read succeeded, including stale or absent evidence
+  1  Provider or storage read failed
+  2  Usage, profile, or credentials are invalid
+`
   if (key === "config") return `Usage: endpoint-monitor config <command> [options]
 
 Inspect, validate, or explicitly import a local candidate. D1 owns the executing configuration.
@@ -399,6 +421,7 @@ Commands:
   config <command>       Inspect, validate, or synchronize the target document
   incidents <command>    View or triage durable incidents
   targets                List the active configured targets
+  status                 Read scheduler and retained target-check evidence
   probe [<file>]         Probe the active or supplied target document once
   cloudflare bootstrap   Create or adopt Cloudflare resources
   cloudflare configure   Prepare the Cloudflare adapter
@@ -451,6 +474,10 @@ function helpRoute(positionals) {
 
 function commandFromPositionals(positionals) {
   if (positionals.length === 0) throw new CliError("A command is required")
+  if (positionals[0] === "status") {
+    if (positionals.length !== 1) throw new CliError(`Unexpected argument: ${positionals[1]}`)
+    return { command: COMMAND.STATUS, configPath: null }
+  }
   if (positionals[0] === "config") {
     if (positionals.length === 1) throw new CliError("config requires a subcommand")
     if (!CONFIG_COMMANDS.has(positionals[1])) {
@@ -1048,6 +1075,16 @@ export async function runCli(argv, overrides = {}) {
       accountId, apiToken: dependencies.environment.CLOUDFLARE_API_TOKEN,
       databaseId: monitorDatabaseId(wrangler), fetchImpl: dependencies.fetchImpl,
     })
+    if (parsed.command === COMMAND.STATUS) {
+      const result = await operator.status(new Date(dependencies.clock()).toISOString())
+      writeLine(dependencies.stdout, parsed.options.json ? JSON.stringify(result) : [
+        `Scheduler: ${result.execution.state}; last completed: ${result.execution.lastRun?.completedAt ?? "unobserved"}`,
+        `Configuration revision: ${result.configuration?.revision ?? "absent"}`,
+        "TARGET\tCHECK\tCHECKED AT (UTC)\tRETAINED PASS (UTC)",
+        ...result.targets.map((target) => [target.targetId, target.state, target.observedAt ?? "unobserved", target.lastSuccessAt ?? "unobserved"].join("\t")),
+      ].join("\n"))
+      return EXIT.SUCCESS
+    }
     if (parsed.command === COMMAND.CONFIG_REMOTE) {
       const remote = await operator.read()
       if (!remote) throw new CliError("Remote configuration is absent; nothing was exported", EXIT.RUNTIME)

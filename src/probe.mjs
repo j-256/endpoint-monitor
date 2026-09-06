@@ -234,7 +234,7 @@ export async function probeTargets(fetchImpl, targets, observedAt, concurrency =
       cursor += 1
       const target = targets[index]
       results[index] = Object.freeze({
-        observation: await probeTarget(fetchImpl, target, observedAt),
+        observation: await probeTarget(fetchImpl, target, typeof observedAt === "function" ? observedAt() : observedAt),
         target,
       })
     }

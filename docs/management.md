@@ -44,9 +44,9 @@ Every command requires `workspaceId`. Optional paging cursors are opaque to call
 
 | Command | Additional input | Result |
 | --- | --- | --- |
-| `snapshot` | None | Configuration metadata, feature readiness, bounded incident and pending-delivery counts |
+| `snapshot` | None | Configuration metadata, feature readiness, scheduler completion evidence, bounded incident and pending-delivery counts |
 | `configuration` | None | Private executing portable document and revision, or an absent configuration |
-| `targets` | Optional `cursor` | Target page with response expectations and exceptional-state evidence |
+| `targets` | Optional `cursor` | Target page with response expectations, retained check results, and separate exceptional-state evidence |
 | `target` | `targetId` | One target in the same target-page result shape |
 | `incidents` | Optional `status` (`open`, `resolved`, or `all`), `targetId`, `cursor` | Incident page including revisions |
 | `incident` | `incidentId`, optional `cursor` | Incident and a page of immutable triage history |
@@ -63,7 +63,15 @@ The CLI uses the same triage statement builder, and CLI actions invalidate pendi
 
 ## Freshness and recovery
 
-Read time is not probe time. Healthy probes without exceptional state intentionally perform no durable writes. The snapshot therefore reports execution health as unobserved, and target evidence distinguishes unobserved, exceptional, incident, and configuration-changed states. Use Workers Observability for invocation health and normal probe summaries. A successful configuration save affects future invocations, not an already-running probe or evidence of endpoint recovery.
+Read time is not probe time. Each completed scheduled minute can publish one bounded aggregate run-status snapshot. `snapshot.execution` reports the latest recorded run's scheduled, started, and completed times, configured revision, and bounded outcome counts. Its state is `unobserved`, `fresh`, or `stale`. The expected cadence is one minute with two minutes of grace, measured from scheduled time, so a delayed invocation cannot appear fresh merely by finishing late. A run with failed checks can still have fresh completion evidence. Phase and delivery errors remain explicit counts, not successful outcomes. Disabled runs can record completion with no check results when D1 is bound.
+
+Each target's `evidence.check` contains its last retained check, last retained pass, exact freshness deadline, checked configuration revision, configuration match, HTTP status, and fixed error code. Check states are `unobserved`, `passed`, `failed`, `stale`, and `configuration_changed`. Freshness allows the checked interval plus two minutes of grace, measured conservatively from scheduled/check time. Configuration revision and both document and target fingerprints must match; an old A-to-B-to-A result is not proof of the new revision. Any configuration revision change requires new matching checks, even for targets whose own fields were unchanged. The sibling exceptional-state fields and incident ID retain their separate meaning: a passing check can coexist with an open incident awaiting its recovery threshold.
+
+Storage is a ring of 120 minute slots with at most ten results and 16 KiB per slot. First completion wins within the same scheduled minute. Later minutes replace only their older slot; late invocations cannot overwrite a newer slot. Continuous operation covers approximately two hours. Slots are not a complete uptime history or an all-time last-success ledger, and old slots may remain while execution is stopped. A missing retained pass means no matching pass is present in these bounded records, not that a target has never passed. Snapshot failures do not refresh evidence and surface as fixed runtime failures. Reads and HTTP `/healthz` never write a heartbeat or run probes.
+
+The authenticated `endpoint-monitor status` CLI and optional `/api/status` endpoint use the same evidence calculations. Clients must age cached deadlines even when a request fails, the browser is offline, or a historical page is open. Never change a stale state to healthy merely because a read succeeded. Workers Observability remains the diagnostic source for CPU, invocation exceptions, and failures before completion. Missing-run alert delivery requires an independent observer; the stopped scheduler cannot notify about its own absence. These snapshots supply positive evidence and stale detection, not an independent alerting service.
+
+A successful configuration save affects future invocations, not an already-running probe or evidence of endpoint recovery.
 
 Reviews expire after ten minutes. Application rechecks actor, workspace, credential revision and capabilities, expiry, configuration revision, and incident revision where relevant. Acceptance and domain effects use one atomic batch; the acceptance guard also checks database time so a delayed request cannot commit after expiry using an earlier application timestamp. Concurrent duplicate application returns the same receipt and never reapplies the domain operation. Domain failure rolls back acceptance; a lost response can be reconciled with `operation_get`. Accepted receipts retain the original result even if configuration or incident state later changes. They are not a live status view.
 

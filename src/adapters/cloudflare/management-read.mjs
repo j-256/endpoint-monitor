@@ -2,6 +2,7 @@ import { configuredTargets } from "../../config.mjs"
 import { INCIDENT_TRIAGE_FIELDS_SQL, incidentFromRow } from "./d1-store.mjs"
 import { d1ConfigurationQuery, readConfigurationAuthority } from "./configuration-authority.mjs"
 import { readRuntimeSettings } from "./runtime-config.mjs"
+import { executionEvidence, readRunSnapshots, targetCheckEvidence } from "./run-status.mjs"
 import {
   MANAGEMENT_LIMITS, ManagementError, decodeCursor, encodeCursor,
   invalid, managementId, managementTimestamp, strictObject,
@@ -44,13 +45,14 @@ export async function readManagementSnapshot(env, now) {
     analyticsEnabled: settings?.analyticsEnabled ?? null,
     openIncidents: { count: Math.min(incidents.results.length, MANAGEMENT_LIMITS.page), truncated: incidents.results.length > MANAGEMENT_LIMITS.page },
     pendingDeliveries: { count: Math.min(pending.results.length, MANAGEMENT_LIMITS.page), truncated: pending.results.length > MANAGEMENT_LIMITS.page },
-    executionHealth: "unobserved", probeEvidence: "exceptional-state-only",
+    execution: executionEvidence(await readRunSnapshots(d1ConfigurationQuery(db)), now),
   }
 }
 
 export async function readManagementTargets(db, input, now) {
   const remote = await readConfiguration(db)
   if (!remote) return { readAt: now, configuration: null, items: [], nextCursor: null }
+  const runs = await readRunSnapshots(d1ConfigurationQuery(db))
   let after = ""
   if (input.cursor !== undefined && input.cursor !== null) {
     const cursor = strictObject(decodeCursor(input.cursor), ["kind", "workspaceId", "revision", "after"])
@@ -83,6 +85,7 @@ export async function readManagementTargets(db, input, now) {
         configurationMatches: state ? matches : null,
         status: state?.last_probe_status ?? null,
         errorCode: state?.last_probe_error_code ?? null,
+        check: targetCheckEvidence(runs, remote, configured.get(target.id), now),
       } }
     }),
     nextCursor: !input.targetId && targets.length > MANAGEMENT_LIMITS.page

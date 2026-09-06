@@ -194,9 +194,11 @@ The target document is stored in D1 rather than an environment variable because 
 
 ## Storage behavior
 
-Every enabled invocation reads one configuration row and the small exceptional-state set. A healthy target with no candidate or incident causes no D1 write. Repeated failures for an already-open incident also cause no write. D1 changes are limited to configuration changes, failure or recovery candidates, incident transitions, explicit operator triage actions, unique provider signals, delivery attempts, suppression after configuration changes, and periodic retention cleanup.
+Every enabled invocation reads one configuration row and the small exceptional-state set. A healthy target with no candidate or incident causes no per-target D1 write. Repeated failures for an already-open incident also cause no incident-engine write. Each completed scheduled minute can additionally write one bounded aggregate run-status snapshot, including successful check evidence, into fixed-capacity storage. Other D1 changes cover configuration changes, failure or recovery candidates, incident transitions, explicit operator triage actions, unique provider signals, delivery attempts, suppression after configuration changes, and periodic retention cleanup.
 
-At one Cron invocation per minute, the Worker receives 1,440 scheduled invocations per day regardless of target count. The actual probe total is controlled by the target interval. Workers Observability carries invocation health, CPU time, wall time, subrequest count, and compact run summaries without turning routine success into D1 history.
+Use `endpoint-monitor status` for scheduler completion and retained target check evidence, or `endpoint-monitor status --json` for automation. It reads the executing configuration and bounded run-status ring without contacting targets or reading a local candidate. Passing checks, scheduler freshness, and open incidents are separate facts. See [freshness and recovery](docs/management.md#freshness-and-recovery) for configuration matching, retention limits, and missing-run detection.
+
+At one Cron invocation per minute, the Worker receives 1,440 scheduled invocations per day regardless of target count. The actual probe total is controlled by the target interval. Workers Observability carries invocation health, CPU time, wall time, subrequest count, and compact run summaries without an unbounded D1 probe history.
 
 ## Hookrelay events
 

@@ -1,4 +1,6 @@
 import { CloudflareApi } from "./api.mjs"
+import { configuredTargets } from "../../config.mjs"
+import { executionEvidence, readRunSnapshots, targetCheckEvidence } from "./run-status.mjs"
 import {
   ConfigurationAuthorityError,
   readConfigurationAuthority,
@@ -30,6 +32,19 @@ export class CloudflareConfigurationOperator {
 
   read() {
     return readConfigurationAuthority(this.query)
+  }
+
+  async status(now) {
+    const remote = await this.read()
+    const runs = await readRunSnapshots(this.query)
+    const { configuration: _configuration, ...metadata } = remote ?? {}
+    return {
+      readAt: now, configuration: remote ? metadata : null,
+      execution: executionEvidence(runs, now),
+      targets: remote ? (await configuredTargets(remote.configuration)).map((target) => ({
+        targetId: target.id, ...targetCheckEvidence(runs, remote, target, now),
+      })) : [],
+    }
   }
 
   review(candidate) {

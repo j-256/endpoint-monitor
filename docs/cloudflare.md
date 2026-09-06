@@ -26,7 +26,7 @@ The revision-authority migration preserves the original configuration row, gives
 
 Apply the additive migration before the updated CLI or management authority is used. Back up the database first. Old scheduled code can continue reading the configuration while ignoring the additive metadata, but an old CLI cannot safely regain unconditional writes by rolling back code alone. Do not remove the revision guards to make an old import work. Use an updated CLI for configuration recovery, preserving newer remote state and its revision. No live probe target or incident needs to be changed to verify this migration.
 
-Configuration imports enforce the adapter's existing per-run probe ceiling and a 256 KiB canonical document limit before writing. These are explicit application bounds, not evidence of measured Free-plan CPU compliance. Accepted imports write the configuration and bounded audit metadata; configuration reads and unchanged imports write nothing. The change adds no scheduled work or logging stream, and ordinary healthy probes retain their zero-write invariant. Paid-plan access is not used to bypass those limits.
+Configuration imports enforce the adapter's existing per-run probe ceiling and a 256 KiB canonical document limit before writing. These are explicit application bounds, not evidence of measured Free-plan CPU compliance. Accepted imports write the configuration and bounded audit metadata; configuration reads and unchanged imports write nothing. Imports add no separate scheduled work or logging stream. Ordinary healthy probes retain their no-per-target-write invariant, with the aggregate run-status exception documented below. Paid-plan access is not used to bypass those limits.
 
 ## Public probe routing
 
@@ -57,7 +57,7 @@ Verify these conditions before enabling delivery:
 - `/healthz` returns a minimal successful response
 - Authenticated `/api/status` shows the intended explicit targets and a schedule within capacity
 - Every run remains within the probe, concurrency, and subrequest ceilings
-- Healthy runs report zero D1 writes
+- Healthy runs report only their bounded aggregate run-status write, with no per-target healthy state
 - A controlled synthetic HTTP 526 opens an incident immediately
 - The synthetic target recovers only after its configured number of successful probes
 - Logs contain target IDs and fixed codes but no target URLs, query strings, Hookrelay paths, exception text, or secrets
@@ -78,9 +78,17 @@ The example enables Workers Logs and invocation logs. Platform invocation record
 | `endpoint_monitor.runtime_error` | Error | Critical scheduled invocation failure |
 | `endpoint_monitor.management_failed` | Warning | Fixed management failure requiring availability or receipt inspection |
 
-The run summary includes scheduled time, configured and due target counts, probe outcomes, analytics row and match counts, transition count, D1 row writes, delivery outcomes, retention count, phase errors, and budgeted subrequests. It intentionally excludes full URLs and raw exception text.
+The run summary includes scheduled time, configured and due target counts, probe outcomes, analytics row and match counts, transition count, D1 logical changes, `runStatusWrites`, delivery outcomes, retention count, phase errors, and budgeted subrequests. It intentionally excludes full URLs and raw exception text.
 
-Use the Worker name as the primary Observability filter, then filter the structured `event` field. A normal steady-state run has `d1Writes: 0`. Repeated nonzero values without incident activity indicate a configuration or state-machine regression worth investigating.
+Use the Worker name as the primary Observability filter, then filter the structured `event` field. A normal steady-state scheduled minute has `runStatusWrites: 1` and `d1Writes: 1`; duplicate completion for the same minute adds no snapshot write. Investigate other repeated changes without configuration, incident, delivery, or retention activity. The incident engine still writes no per-target state for ordinary healthy probes.
+
+## Positive execution and check evidence
+
+Apply the additive run-status migration before deploying a Worker that publishes snapshots. It does not edit targets, incidents, or credentials. Keep the database backup and previous artifact. Rolling back the Worker preserves the additive table, but completion evidence becomes stale when older code stops publishing it; do not mistake rollback liveness for monitoring evidence.
+
+Use `endpoint-monitor status` or `endpoint-monitor status --json` for scheduler completion and configuration-bound target checks without probing targets or opening the local target file. The [management freshness contract](management.md#freshness-and-recovery) specifies deadlines, disabled runs, revision matching, retained passes, and late/duplicate completion behavior. `/healthz` proves only that the HTTP handler responded. It does not prove the cron trigger fired.
+
+Run-status storage has fixed capacity and one aggregate upsert per completed minute, regardless of whether zero or the bounded maximum targets were due. An uninterrupted minute schedule therefore adds at most 1,440 successful snapshot changes per day, excluding all other runtime and management work. This is an application-write projection, not a billable D1 row-write estimate: index accounting, read scans, CPU, and logs require measurement. Scheduled runs add no extra network requests or per-check log events for snapshots. Reads inspect at most the fixed ring and return bounded target pages. Workers Free CPU and aggregate D1/log allowance compliance for representative target sets remains unmeasured; Paid access does not make this feature Free-plan verified. Document measured overages before increasing these bounds.
 
 ## D1 inspection
 
@@ -112,7 +120,7 @@ SELECT COUNT(*) AS open_incidents FROM monitor_incident WHERE status = 'open';
 SELECT COUNT(*) AS pending_deliveries FROM monitor_outbox WHERE delivered_at IS NULL;
 ```
 
-Do not use a per-probe history table. Routine health belongs in Workers Observability, while D1 retains only the state needed for thresholds, incidents, immutable operator actions, deduplication, and retry.
+Do not use an unbounded per-probe history table. Routine detailed history belongs in Workers Observability. D1 retains sparse incident-engine state, immutable operator actions, deduplication, retry, and the fixed-capacity aggregate run-status ring.
 
 ## Analytics behavior
 

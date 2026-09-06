@@ -8,4 +8,4 @@ Use Node.js 22 or newer. Run focused tests while developing, then run `npm run c
 
 Source code and comments use ASCII. Comments do not end in periods. Use Conventional Commits.
 
-Healthy probes with no exceptional state must not write durable storage. Traffic and provider inventory may enrich configured targets but must never enroll targets.
+Healthy probes with no exceptional state must not write per-target durable state. One bounded aggregate run-status snapshot per completed scheduled minute is the explicit exception: keep fixed-capacity storage, configuration-bound check evidence, and honest freshness without a per-probe event history. Traffic and provider inventory may enrich configured targets but must never enroll targets.

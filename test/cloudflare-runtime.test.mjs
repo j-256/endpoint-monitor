@@ -76,7 +76,7 @@ function totalChanges(db) {
   return Number(db.sqlite.prepare("SELECT total_changes() AS count").get().count)
 }
 
-test("healthy scheduled runs perform zero D1 writes", async (context) => {
+test("healthy scheduled runs write only one bounded run snapshot", async (context) => {
   const db = d1Fixture(context)
   await seedConfiguration(db, configuration())
   const before = totalChanges(db)
@@ -92,12 +92,14 @@ test("healthy scheduled runs perform zero D1 writes", async (context) => {
   )
   assert.equal(summary.succeededProbes, 1)
   assert.equal(summary.failedProbes, 0)
-  assert.equal(summary.d1Writes, 0)
-  assert.equal(totalChanges(db), before)
+  assert.equal(summary.d1Writes, 1)
+  assert.equal(summary.runStatusWrites, 1)
+  assert.equal(totalChanges(db), before + 1)
+  assert.equal((await readMonitorStatus(db)).states.length, 0)
   assert.equal(logger.entries.at(-1).value.event, "endpoint_monitor.run")
 })
 
-test("healthy response validations perform zero D1 writes", async (context) => {
+test("healthy response validations write only one bounded run snapshot", async (context) => {
   const db = d1Fixture(context)
   await seedConfiguration(db, {
     ...configuration([{
@@ -123,8 +125,9 @@ test("healthy response validations perform zero D1 writes", async (context) => {
   )
   assert.equal(summary.succeededProbes, 1)
   assert.equal(summary.failedProbes, 0)
-  assert.equal(summary.d1Writes, 0)
-  assert.equal(totalChanges(db), before)
+  assert.equal(summary.d1Writes, 1)
+  assert.equal(summary.runStatusWrites, 1)
+  assert.equal(totalChanges(db), before + 1)
 })
 
 test("response validation failures persist only fixed diagnostics", async (context) => {
@@ -188,7 +191,7 @@ test("shadow mode persists a 526 incident without delivery state", async (contex
   const status = await readMonitorStatus(db)
   assert.equal(summary.failedProbes, 1)
   assert.equal(summary.transitions, 1)
-  assert.equal(summary.d1Writes, 2)
+  assert.equal(summary.d1Writes, 3)
   assert.equal(status.openIncidents[0].id, "incident-shadow")
   assert.equal(status.pendingDeliveries, 0)
   assert.equal(JSON.stringify(logger.entries).includes("https://example.com/"), false)
@@ -276,7 +279,7 @@ test("enabling delivery bridges an incident opened in shadow mode", async (conte
   const summary = await runCloudflareScheduled(
     enabled,
     Date.parse("2026-08-26T03:02:00.000Z"),
-    baseOptions,
+    { ...baseOptions, clock: () => Date.parse("2026-08-26T03:02:00.000Z") },
   )
   assert.equal(summary.deliveryBridged, 1)
   assert.equal(summary.deliveriesSucceeded, 1)

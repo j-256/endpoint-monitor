@@ -29,6 +29,8 @@ import {
 import { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 import { handleManagement } from "./management.mjs"
 import { MANAGEMENT_PATH } from "./management-contract.mjs"
+import { d1ConfigurationQuery } from "./configuration-authority.mjs"
+import { executionEvidence, readRunSnapshots, targetCheckEvidence, writeRunStatus } from "./run-status.mjs"
 
 export { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 
@@ -215,6 +217,7 @@ function newSummary(scheduledAt, settings) {
     failedProbes: 0,
     phaseErrors: 0,
     pruned: 0,
+    runStatusWrites: 0,
     scheduledAt,
     succeededProbes: 0,
     targetCount: 0,
@@ -236,6 +239,13 @@ export async function runCloudflareScheduled(
   const settings = readRuntimeSettings(env)
   const summary = newSummary(scheduledAt, settings)
   if (!settings.enabled) {
+    if (settings.db) {
+      const startedAt = timestamp(clock(), "invalid-runtime-time")
+      summary.runStatusWrites = await writeRunStatus(settings.db, {
+        scheduledAt, startedAt, completedAt: timestamp(clock(), "invalid-runtime-time"), summary,
+      })
+      summary.d1Writes += summary.runStatusWrites
+    }
     emit(logger, "log", "endpoint_monitor.run", summary)
     return Object.freeze(summary)
   }
@@ -265,7 +275,7 @@ export async function runCloudflareScheduled(
   const probes = await probeTargets(
     budget.fetch,
     schedule.due,
-    runAt,
+    () => timestamp(clock(), "invalid-runtime-time"),
     CLOUDFLARE_RUNTIME_LIMITS.probeConcurrency,
   )
   const probeSummary = summarizeProbeResults(probes)
@@ -315,6 +325,11 @@ export async function runCloudflareScheduled(
   )) {
     await runMaintenance(settings, runAt, summary)
   }
+  summary.runStatusWrites = await writeRunStatus(settings.db, {
+    scheduledAt, startedAt: runAt, completedAt: timestamp(clock(), "invalid-runtime-time"),
+    loaded, probes, summary: { ...summary, subrequests: budget.used },
+  })
+  summary.d1Writes += summary.runStatusWrites
   const complete = Object.freeze({ ...summary, subrequests: budget.used })
   emit(logger, "log", "endpoint_monitor.run", complete)
   return complete
@@ -397,6 +412,8 @@ export async function handleCloudflareRequest(
   try {
     const loaded = await loadStoredConfiguration(settings.db)
     const status = await readMonitorStatus(settings.db)
+    const readAt = timestamp(clock(), "invalid-runtime-time")
+    const runs = await readRunSnapshots(d1ConfigurationQuery(settings.db))
     const schedule = probeSchedule(
       loaded.targets,
       loaded.configuration.defaults.probeIntervalMinutes,
@@ -411,6 +428,11 @@ export async function handleCloudflareRequest(
       configurationUpdatedAt: loaded.updatedAt,
       deliveryEnabled: settings.deliveryEnabled,
       enabled: settings.enabled,
+      readAt,
+      execution: executionEvidence(runs, readAt),
+      targetChecks: loaded.targets.map((target) => ({
+        targetId: target.id, ...targetCheckEvidence(runs, loaded, target, readAt),
+      })),
       schedule: {
         intervalMinutes: schedule.intervalMinutes,
         maximumProbesPerRun: CLOUDFLARE_RUNTIME_LIMITS.maximumProbesPerRun,

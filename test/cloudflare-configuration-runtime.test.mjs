@@ -78,6 +78,12 @@ test("configuration authority and migration run inside workerd with real D1 bind
         const body = await response.json()
         return { status: response.status, result: body.result, error: body.error }
       }
+      const checkedAt = () => Date.parse("2026-09-06T03:21:00.000Z")
+      const schedulerEvidence = await management("snapshot", {}, checkedAt)
+      const targetEvidence = await management("target", { targetId: "example-health" }, checkedAt)
+      const duplicateProbe = await runCloudflareScheduled({ MONITOR_DB: db, ENDPOINT_MONITOR_ENABLED: true }, checkedAt(), {
+        clock: checkedAt, fetchImpl: async () => new Response(null, { status: 200 }), logger: {},
+      })
       const managedPlan = await management("configuration_plan", {
         actorId: "example-operator", expectedRevision: 2,
         configuration: { ...next, targets: [{id:"example-health",url:"https://example.com/managed"}] },
@@ -115,8 +121,10 @@ test("configuration authority and migration run inside workerd with real D1 bind
       const afterDelayed = await readConfigurationAuthority(query)
       return Response.json({ initial, updated, unchanged, staleRejected, legacyRejected,
         rolledBack, finalRevision: remote.revision, auditCount: audit.count,
-        healthyProbeWrites: probe.d1Writes, succeededProbes: probe.succeededProbes,
-        management: { applied, failureTransitions: failure.transitions, failedAction, unapplied, triaged, managedIncident,
+        healthyProbeWrites: probe.d1Writes - probe.runStatusWrites,
+        runStatusWrites: probe.runStatusWrites, succeededProbes: probe.succeededProbes,
+        management: { schedulerEvidence, targetEvidence, duplicateRunWrites: duplicateProbe.runStatusWrites,
+          applied, failureTransitions: failure.transitions, failedAction, unapplied, triaged, managedIncident,
           delayedApply, afterDelayedRevision: afterDelayed.revision } })
     } }
   `
@@ -142,7 +150,11 @@ test("configuration authority and migration run inside workerd with real D1 bind
   assert.equal(result.finalRevision, 2)
   assert.equal(result.auditCount, 2)
   assert.equal(result.healthyProbeWrites, 0)
+  assert.equal(result.runStatusWrites, 1)
   assert.equal(result.succeededProbes, 1)
+  assert.equal(result.management.schedulerEvidence.result.execution.state, "fresh")
+  assert.equal(result.management.targetEvidence.result.items[0].evidence.check.state, "passed")
+  assert.equal(result.management.duplicateRunWrites, 0)
   assert.equal(result.management.applied[0].status, 200)
   assert.deepEqual(result.management.applied[0], result.management.applied[1])
   assert.equal(result.management.applied[0].result.result.revision, 3)

@@ -7,6 +7,7 @@ import test from "node:test"
 import { fileURLToPath } from "node:url"
 import { configurationCandidate } from "../src/adapters/cloudflare/configuration-authority.mjs"
 import { d1ApiFetch, d1Fixture } from "./d1.fixture.mjs"
+import { runCloudflareScheduled } from "../src/adapters/cloudflare/runtime.mjs"
 
 import {
   help,
@@ -116,6 +117,7 @@ test("CLI help covers every route and supports equivalent spellings", async () =
     [["help", "incidents", "snooze"], ["incidents", "snooze", "--help"]],
     [["help", "incidents", "dismiss"], ["incidents", "dismiss", "--help"]],
     [["help", "targets"], ["targets", "--help"]],
+    [["help", "status"], ["status", "--help"]],
     [["help", "probe"], ["probe", "--help"]],
     [["help", "cloudflare"], ["cloudflare", "--help"]],
     [["help", "cloudflare", "bootstrap"], ["cloudflare", "bootstrap", "--help"]],
@@ -146,6 +148,7 @@ test("CLI help gives every long option a short equivalent", () => {
     ["incidents", "snooze"],
     ["incidents", "dismiss"],
     ["targets"],
+    ["status"],
     ["probe"],
     ["cloudflare", "configure"],
   ]
@@ -281,6 +284,45 @@ test("config path resolves the active target document", async () => {
   ])
   assert.equal(json.status, 0)
   assert.deepEqual(JSON.parse(json.stdout), { configPath: CONFIG_PATH })
+})
+
+test("status reads shared bounded evidence without the local target file and validates option grammar", async (context) => {
+  const db = d1Fixture(context)
+  const deps = dependencies({
+    environment: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, CLOUDFLARE_API_TOKEN: "example-token" },
+    fetchImpl: d1ApiFetch(db),
+  })
+  assert.equal(await runCli(["config", "sync", "-p", PROFILE_PATH, ...INITIAL_REVIEW], deps), 0)
+  const at = Date.parse("2026-08-27T03:00:00.000Z")
+  for (let index = 0; index < 5; index += 1) await runCloudflareScheduled({ MONITOR_DB: db, ENDPOINT_MONITOR_ENABLED: true }, at + index * 60000, {
+    clock: () => at + index * 60000, logger: {}, fetchImpl: async () => new Response(null, { status: 200 }),
+  })
+  const writes = db.sqlite.prepare("SELECT total_changes() AS count").get().count
+  const readFileImpl = async (filename) => {
+    assert.notEqual(filename, CONFIG_PATH)
+    return dependencies().readFileImpl(filename)
+  }
+  for (const argv of [["status", "-jp" + PROFILE_PATH], ["--json", "status", "--profile=" + PROFILE_PATH],
+    ["-j", "--profile", PROFILE_PATH, "--", "status"]]) {
+    const result = await commandOutput(argv, { ...deps, readFileImpl, stdout: streamFixture(), stderr: streamFixture(), clock: () => at + 4 * 60000 })
+    assert.equal(result.status, 0, result.stderr)
+    const value = JSON.parse(result.stdout)
+    assert.equal(value.execution.state, "fresh")
+    assert.equal(value.targets[0].state, "passed")
+    assert.equal(value.configuration.revision, 1)
+    assert.equal(result.stdout.includes("https://"), false)
+  }
+  const text = await commandOutput(["status", "-p", PROFILE_PATH], { ...deps, readFileImpl, stdout: streamFixture(), stderr: streamFixture(), clock: () => at + 20 * 60000 })
+  assert.equal(text.status, 0)
+  assert.match(text.stdout, /Scheduler: stale/)
+  assert.match(text.stdout, /example-home\tstale/)
+  assert.equal(db.sqlite.prepare("SELECT total_changes() AS count").get().count, writes)
+  for (const flag of ["-h", "--help"]) assert.equal((await commandOutput(["status", flag])).status, 0)
+  for (const argv of [["status", "extra"], ["status", "--profile="], ["status", "-p"], ["status", "--all"], ["status", "--bogus"]]) {
+    assert.equal((await commandOutput(argv)).status, 2)
+  }
+  const empty = await commandOutput(["status", "-jp" + PROFILE_PATH], { environment: deps.environment, fetchImpl: d1ApiFetch(d1Fixture(context)) })
+  assert.equal(JSON.parse(empty.stdout).execution.state, "unobserved")
 })
 
 test("config show and validate support active and explicit target documents", async () => {

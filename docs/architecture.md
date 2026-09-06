@@ -80,6 +80,10 @@ Saving configuration does not cancel an in-flight probe invocation or prove the 
 
 An incident opened with delivery disabled has no outbox row. When delivery is enabled, the adapter creates the missing problem event for every still-open incident before normal delivery. Incidents that opened and recovered entirely in shadow mode stay historical and do not alert retroactively.
 
+## Bounded positive evidence
+
+The Cloudflare adapter records one aggregate snapshot at completion of each scheduled minute in a fixed-capacity ring. The portable incident engine remains sparse and healthy per-target state remains absent. Snapshots bind actual check-start timestamps and fixed outcomes to the executing configuration revision and fingerprints. Scheduler completion has its own freshness deadline, independent of target intervals and incident recovery thresholds. First completion wins within a minute and a conditional slot upsert rejects older replacements, so concurrent or late invocations cannot rewrite newer evidence. Failed completion storage does not advance health. Management, status HTTP, and operator CLI reads use the same adapter functions; reads never freshen the evidence. See the [management contract](management.md#freshness-and-recovery) for bounds, aging, and the independent-observer requirement for missed-run alerts.
+
 ## Consistency and failure behavior
 
 D1 batches group state, incident, action, and outbox mutations for one transition. Unique indices prevent two open incidents per target and duplicate transition events. Guarded operator mutations become no-ops when automatic recovery wins a race. Scheduled invocations are expected not to overlap at normal probe timeouts, but those database constraints remain the last line of defense.

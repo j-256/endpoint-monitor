@@ -4,6 +4,15 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Fixed-capacity scheduled-run snapshots with configuration-bound check outcomes, retained passes, and separate scheduler and target freshness
+- Read-only `status` CLI and shared protected management/status evidence without probing targets or reading a local candidate
+
+### Changed
+
+- Healthy scheduled runs persist only their bounded aggregate completion snapshot while the incident engine retains no ordinary healthy per-target state
+
 ## [0.2.1] - 2026-08-29
 
 ### Fixed

@@ -113,7 +113,7 @@ test("management reads are bounded, private, and distinguish unobserved probes f
   const { db, env, run, open } = await fixture(context)
   const writes = db.sqlite.prepare("SELECT total_changes() AS count").get().count
   const snapshot = result(await run("snapshot"))
-  assert.equal(snapshot.executionHealth, "unobserved")
+  assert.equal(snapshot.execution.state, "unobserved")
   assert.equal(snapshot.configuration.revision, 1)
   assert.equal(snapshot.enabled, true)
   const targets = result(await run("targets"))
