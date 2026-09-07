@@ -37,6 +37,10 @@ const WRANGLER_EXAMPLE = JSON.stringify({
     database_name: "endpoint-monitor",
   }],
   main: "src/adapters/cloudflare/worker.mjs",
+  limits: {
+    cpu_ms: 250,
+    subrequests: 100,
+  },
   name: "endpoint-monitor",
   services: [],
   vars: {},
@@ -145,6 +149,10 @@ test("Wrangler generation contains only selected public bindings", () => {
   assert.equal(generated.d1_databases[0].database_name, "endpoint-monitor")
   assert.equal(generated.d1_databases[0].migrations_dir, PACKAGE_MIGRATIONS_PATH)
   assert.equal(generated.main, PACKAGE_WORKER_PATH)
+  assert.deepEqual(generated.limits, {
+    cpu_ms: 250,
+    subrequests: 100,
+  })
   assert.deepEqual(generated.services, [{ binding: "HOOKRELAY", service: "hookrelay" }])
   assert.equal(generated.vars.CLOUDFLARE_ANALYTICS_ENABLED, "true")
   assert.equal(generated.vars.CLOUDFLARE_ACCOUNT_ID, ACCOUNT_ID)

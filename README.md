@@ -117,6 +117,8 @@ Online operator applications can use the [protected management API](docs/managem
 
 The Cloudflare adapter uses one Cron trigger per minute. A stable hash distributes targets across `probeIntervalMinutes`, with at most 10 probes and five concurrent outbound connections per invocation. Configuration that cannot satisfy that cadence is rejected rather than silently probed less often. The adapter also enforces a 45-external-subrequest budget and uses manual redirects. Review the [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) before deploying on a different plan or after changing these bounds.
 
+Generated deployments additionally cap each invocation at 250 ms CPU and 100 total subrequests. These Workers Standard guardrails preserve headroom above the application limits without retaining Cloudflare's broader Paid defaults. The [Cloudflare operation guide](docs/cloudflare.md#execution-ceilings-and-free-compatibility) records the production observation, Free fallback, and recovery behavior.
+
 Set the account-scoped deployment credentials that Wrangler and the controller already recognize:
 
 ```sh

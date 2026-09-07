@@ -10,6 +10,14 @@ Run `endpoint-monitor init` in a project-local npm installation. It creates an o
 
 Configuration, target, probe, and incident commands read the operator profile so routine operations do not require a target path or D1 identifier.
 
+## Execution ceilings and Free compatibility
+
+The Wrangler template and every generated deployment configuration limit an invocation to 250 ms CPU and 100 total subrequests. Workers Observability for the seven days ending 2026-09-07 recorded a maximum of approximately 22 ms CPU, leaving about 11.4 times the observed peak. The subrequest ceiling preserves more than twice the application's fixed 45-external-subrequest budget plus its bounded D1 work while reducing the Workers Paid default of 10,000.
+
+These custom `limits.cpu_ms` and `limits.subrequests` settings require the Workers Standard usage model. A Free deployment must omit the custom block and receives Cloudflare's fixed per-invocation ceilings of 10 ms CPU, 50 external subrequests, and 1,000 internal-service subrequests. The observed production CPU maximum exceeds the Free allowance, so reducing the target set and keeping optional analytics and delivery disabled is only a candidate fallback, not a verified Free profile. Keep scheduled monitoring disabled on Free until a representative target document remains within the fixed CPU ceiling, or use another runtime adapter and scheduler. Paid is justified for the deployed profile because its observed legitimate execution can exceed 10 ms.
+
+Cloudflare terminates an invocation that exhausts either configured ceiling and records a resource-limit outcome. Correlate that outcome with the bounded run-status record and invocation summary before retrying or raising a limit; a missing completion must become stale rather than healthy. The limits and configuration behavior were verified against [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [Wrangler limits configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#limits) on 2026-09-07.
+
 `endpoint-monitor cloudflare bootstrap` creates one D1 database or adopts `--database-id <uuid>`, generates the package-resolved Wrangler configuration, and applies the bundled migrations. A dry run validates the target and reports whether the database would be created, adopted, or reused without writing locally or remotely. Reruns reuse the recorded D1 binding and preserve feature selections that were not explicitly supplied.
 
 The lower-level `endpoint-monitor cloudflare configure` command remains available for an operator who already knows the D1 identifier and needs to regenerate local configuration without creating resources. Bootstrap is the normal first-install and package-upgrade path.

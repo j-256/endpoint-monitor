@@ -8,6 +8,10 @@
   ],
   "workers_dev": true,
   "preview_urls": false,
+  "limits": {
+    "cpu_ms": 250,
+    "subrequests": 100
+  },
   "d1_databases": [
     {
       "binding": "MONITOR_DB",
