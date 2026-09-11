@@ -54,9 +54,9 @@
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=test/** --test-coverage-exclude=scripts/capture-cover.mjs --test-coverage-exclude=scripts/release.mjs --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs"
   },
   "dependencies": {
-    "wrangler": "4.127.1"
+    "wrangler": "4.129.1"
   },
   "devDependencies": {
-    "playwright": "1.62.1"
+    "playwright": "1.63.0"
   }
 }
