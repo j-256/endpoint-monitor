@@ -229,4 +229,6 @@ npm run check
 
 `npm run check` runs the complete local release gate, including package smoke installation and validation of the committed portfolio cover. Install Playwright Chromium with `npx playwright install chromium`, then run `npm run capture:cover` to regenerate `docs/screenshots/cover.png` from its tracked synthetic HTML scene.
 
+CI renders the cover after the release checks and retains it as an artifact. Successful default-branch runs publish a changed image to `docs/screenshots/cover.png` with an image-only commit. Publication checks that the source revision is still the branch tip; superseded runs leave publication to the newer build. Pull requests render without publishing. The CI workflow also supports manual refreshes.
+
 See the [changelog](CHANGELOG.md), [release procedure](docs/releases.md), and [contribution guidance](CONTRIBUTING.md). The project is licensed under [AGPL-3.0-only](LICENSE).
