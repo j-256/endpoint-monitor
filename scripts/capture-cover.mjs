@@ -18,7 +18,9 @@ import { chromium } from "playwright"
 import {
   COVER_HEIGHT,
   COVER_PATH,
+  COVER_PIXEL_DENSITY,
   COVER_SOURCE_PATH,
+  COVER_VIEWPORT,
   COVER_WIDTH,
   validateCoverImage,
 } from "./cover-image.mjs"
@@ -205,9 +207,9 @@ async function captureCover(outputPath) {
   try {
     const context = await browser.newContext({
       colorScheme: "dark",
-      deviceScaleFactor: 1,
+      deviceScaleFactor: COVER_PIXEL_DENSITY,
       reducedMotion: "reduce",
-      viewport: { height: COVER_HEIGHT, width: COVER_WIDTH },
+      viewport: COVER_VIEWPORT,
     })
     const page = await context.newPage()
     const browserErrors = []
@@ -233,7 +235,7 @@ async function captureCover(outputPath) {
         width: rectangle?.width ?? 0,
       }
     })
-    if (!state.bodyText || state.width !== COVER_WIDTH || state.height !== COVER_HEIGHT) {
+    if (!state.bodyText || state.width !== COVER_VIEWPORT.width || state.height !== COVER_VIEWPORT.height) {
       throw new CoverError("Cover source did not render at the expected size", EXIT.RUNTIME)
     }
     if (state.overflow) throw new CoverError("Cover source overflowed the viewport", EXIT.RUNTIME)

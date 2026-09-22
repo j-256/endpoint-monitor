@@ -232,3 +232,7 @@ npm run check
 CI renders the cover after the release checks and retains it as an artifact. Successful default-branch runs publish a changed image to `docs/screenshots/cover.png` with an image-only commit. Publication checks that the source revision is still the branch tip; superseded runs leave publication to the newer build. Pull requests render without publishing. The CI workflow also supports manual refreshes.
 
 See the [changelog](CHANGELOG.md), [release procedure](docs/releases.md), and [contribution guidance](CONTRIBUTING.md). The project is licensed under [AGPL-3.0-only](LICENSE).
+
+## Cover image density
+
+The project cover is rendered at 4x pixel density while preserving its logical viewport, so enlarged previews retain more detail. Higher density does not increase the displayed text size; use zoom to inspect small labels.

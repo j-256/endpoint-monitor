@@ -49,7 +49,7 @@ test("cover image validation enforces PNG format and portfolio dimensions", () =
     width: COVER_WIDTH,
   })
   assert.throws(() => coverDimensions(new Uint8Array(24)), /PNG/)
-  assert.throws(() => validateCoverImage(png(1280, 720)), /1440x1000/)
+  assert.throws(() => validateCoverImage(png(1280, 720)), /5760x4000/)
 })
 
 test("cover parser supports checks, output forms, bundles, and help", () => {

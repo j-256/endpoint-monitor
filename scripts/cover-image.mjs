@@ -10,11 +10,13 @@ const PNG_SIGNATURE = Object.freeze([
 ])
 const IHDR = Object.freeze([0x49, 0x48, 0x44, 0x52])
 
-export const COVER_HEIGHT = 1000
+export const COVER_PIXEL_DENSITY = 4
+export const COVER_VIEWPORT = Object.freeze({ height: 1000, width: 1440 })
+export const COVER_HEIGHT = COVER_VIEWPORT.height * COVER_PIXEL_DENSITY
 export const COVER_MAX_BYTES = 8 * 1024 * 1024
 export const COVER_PATH = "docs/screenshots/cover.png"
 export const COVER_SOURCE_PATH = "docs/screenshots/cover.html"
-export const COVER_WIDTH = 1440
+export const COVER_WIDTH = COVER_VIEWPORT.width * COVER_PIXEL_DENSITY
 
 function matches(bytes, offset, expected) {
   return expected.every((byte, index) => bytes[offset + index] === byte)
