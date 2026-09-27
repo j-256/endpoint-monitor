@@ -64,6 +64,9 @@ function requiredArchiveFiles() {
     "src/core.mjs",
     "src/project.mjs",
     "wrangler.example.jsonc",
+    "watchdog/README.md",
+    "watchdog/config.example.json",
+    "watchdog/endpoint_monitor_watchdog.py",
   ].map((path) => ({ path }))
 }
 

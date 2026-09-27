@@ -6,6 +6,7 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ### Added
 
+- Independent Unix cron watchdog with protected status polling, Gmail alerts and recovery, notification retry, bounded diagnostics, and daily healthy heartbeats
 - Fixed-capacity scheduled-run snapshots with configuration-bound check outcomes, retained passes, and separate scheduler and target freshness
 - Read-only `status` CLI and shared protected management/status evidence without probing targets or reading a local candidate
 

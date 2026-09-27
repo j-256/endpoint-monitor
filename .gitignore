@@ -8,3 +8,5 @@ endpoint-monitor.json
 node_modules/
 wrangler.jsonc
 .DS_Store
+__pycache__/
+*.pyc

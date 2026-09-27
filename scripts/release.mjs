@@ -32,6 +32,9 @@ const PACKAGE_FILES = Object.freeze([
   "scripts/configure-cloudflare.mjs",
   "src/",
   "wrangler.example.jsonc",
+  "watchdog/README.md",
+  "watchdog/config.example.json",
+  "watchdog/endpoint_monitor_watchdog.py",
 ])
 const REQUIRED_ARCHIVE_FILES = Object.freeze([
   "CHANGELOG.md",
@@ -54,6 +57,9 @@ const REQUIRED_ARCHIVE_FILES = Object.freeze([
   "src/core.mjs",
   "src/project.mjs",
   "wrangler.example.jsonc",
+  "watchdog/README.md",
+  "watchdog/config.example.json",
+  "watchdog/endpoint_monitor_watchdog.py",
 ])
 const ARCHIVE_EXACT_PATHS = new Set([
   "CHANGELOG.md",
@@ -67,6 +73,9 @@ const ARCHIVE_EXACT_PATHS = new Set([
   "package.json",
   "scripts/configure-cloudflare.mjs",
   "wrangler.example.jsonc",
+  "watchdog/README.md",
+  "watchdog/config.example.json",
+  "watchdog/endpoint_monitor_watchdog.py",
 ])
 const ARCHIVE_PREFIXES = Object.freeze(["migrations/", "src/"])
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/

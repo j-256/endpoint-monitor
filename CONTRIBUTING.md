@@ -2,7 +2,7 @@
 
 Endpoint Monitor welcomes focused bug reports and pull requests that preserve explicit target authority, runtime portability, sparse persistence, bounded resource use, and redacted diagnostics.
 
-Use Node.js 22 or newer and install exactly the lockfile state:
+Use Node.js 22 or newer, plus Python 3.6 or newer on Unix for the independent watchdog tests. Prefer a maintained Python release when available. Install exactly the Node lockfile state:
 
 ```sh
 npm ci
@@ -14,7 +14,7 @@ Run focused tests while developing, then run the complete local gate:
 npm run check
 ```
 
-New behavior should include built-in Node test coverage. Cloudflare adapter changes should exercise the in-memory SQLite D1 fixture and Wrangler dry-run where applicable. A healthy target without exceptional state must continue to produce zero D1 writes.
+Core and adapter behavior should include built-in Node test coverage. The standalone watchdog uses Python's built-in `unittest` through `npm run test:watchdog`. Cloudflare adapter changes should exercise the in-memory SQLite D1 fixture and Wrangler dry-run where applicable. A healthy target without exceptional state must continue to produce zero D1 writes.
 
 Do not commit operator targets, live URLs, resource identifiers, generated Wrangler configuration, `.dev.vars`, Hookrelay routes, HMACs, API tokens, incident payloads, or machine-local paths. Use reserved example domains and synthetic identifiers in tests and documentation.
 

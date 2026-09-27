@@ -10,6 +10,10 @@ The monitoring core is runtime-neutral JavaScript. The included Cloudflare Worke
 
 Traffic, DNS inventory, and provider metadata do not define what should be monitored. They can include retired hosts, external fetch destinations, alternate routes, and hostnames whose useful path is not `/`. Endpoint Monitor therefore treats its explicit configuration as the only enrollment authority. Provider data may corroborate a configured target but cannot add one. On Cloudflare, D1 owns that configuration; local documents are import candidates.
 
+## Independent watchdog
+
+Install the optional [Unix cron watchdog](watchdog/README.md) on hosting outside Cloudflare to detect missing scheduled runs and status failures. It sends Gmail alerts and recovery notifications, retries failed mail, and emits a daily healthy heartbeat. The observer uses Python's standard library and a dedicated read-only status token.
+
 ## Installation
 
 Endpoint Monitor ships as one indivisible package: `@j-256/endpoint-monitor` contains the controller CLI, runtime-neutral monitoring core, Cloudflare Worker, D1 migrations, and deployment templates. Install it into a small operator project rather than globally so the controller always deploys the Worker and migrations from the exact installed version.

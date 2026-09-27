@@ -1,0 +1,8 @@
+{
+  "label": "Endpoint Monitor watchdog",
+  "status_url": "https://monitor.example.com/api/status",
+  "status_token_file": "~/.config/endpoint-monitor-watchdog/status-token",
+  "sender": "sender@example.com",
+  "recipient": "recipient@example.com",
+  "smtp_password_file": "~/.config/endpoint-monitor-watchdog/gmail-app-password"
+}
