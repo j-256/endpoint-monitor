@@ -61,6 +61,6 @@
     "wrangler": "4.151.0"
   },
   "devDependencies": {
-    "playwright": "1.63.0"
+    "playwright": "1.64.0"
   }
 }
