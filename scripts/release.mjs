@@ -79,9 +79,13 @@ const ARCHIVE_EXACT_PATHS = new Set([
 ])
 const ARCHIVE_PREFIXES = Object.freeze(["migrations/", "src/"])
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/
+const STABLE_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const RELEASE_BRANCH = "main"
+const COMPARISON_BASE = "https://github.com/j-256/endpoint-monitor/compare/"
 const COMMAND = Object.freeze({
   BUILD: "build",
   CHECK: "check",
+  PREPARE: "prepare",
   HELP: "help",
 })
 const EXIT = Object.freeze({
@@ -103,25 +107,32 @@ export function usage() {
 
 Validate or build the installable npm-format archive distributed through
 GitHub Releases. The build command recreates dist/ and writes the package
-tarball and SHA256SUMS. Neither command publishes, tags, pushes, or deploys.
+tarball and SHA256SUMS. No command publishes, tags, pushes, or deploys.
 
 Commands:
   check                 Validate metadata, changelog, package contents, and install
   build                 Validate and write the release artifacts under dist/
+  prepare               Run checks on clean main, then update version and changelog
 
 Options:
-  -t, --tag <vX.Y.Z>    Require an exact tag match for the package version
+  -t, --tag <vX.Y.Z>    Validate a release tag or select the preparation version
   -h, --help            Show this help
+
+Preparation:
+  npm run release:prepare -- --tag vX.Y.Z
+  Requires Git, npm, clean main, an increasing stable version, a new local
+  tag, and nonempty Unreleased entries. Runs npm run check before changing
+  package.json, package-lock.json, or CHANGELOG.md. Leaves changes for review.
 
 Environment:
   GITHUB_REF_TYPE       Uses GITHUB_REF_NAME when the value is tag
   GITHUB_REF_NAME       Tag supplied by GitHub Actions
 
 Exit status:
-  0  Release validation or build succeeded
+  0  Release validation, preparation, or build succeeded
   1  Packaging, installation, or file operation failed
   2  Usage or release precondition is invalid
-  3  npm or Node.js is unavailable
+  3  Git, npm, or Node.js is unavailable
 `
 }
 
@@ -189,8 +200,11 @@ export function parseArguments(argv, environment = process.env) {
   if (positionals.length > 1) {
     throw new ReleaseError(`Unexpected argument: ${positionals[1]}`)
   }
-  if (![COMMAND.BUILD, COMMAND.CHECK].includes(positionals[0])) {
+  if (![COMMAND.BUILD, COMMAND.CHECK, COMMAND.PREPARE].includes(positionals[0])) {
     throw new ReleaseError(`Unknown command: ${positionals[0]}`)
+  }
+  if (positionals[0] === COMMAND.PREPARE && (typeof tag !== "string" || !STABLE_TAG_PATTERN.test(tag))) {
+    throw new ReleaseError("prepare requires --tag vX.Y.Z with a stable version")
   }
   const environmentTag = environment.GITHUB_REF_TYPE === "tag"
     ? environment.GITHUB_REF_NAME
@@ -282,17 +296,71 @@ async function run(command, argumentsList, options = {}) {
   }
 }
 
-async function readProjectMetadata() {
+async function readProjectMetadata(projectRoot = PROJECT_ROOT) {
   const [packageSource, lockSource, changelog] = await Promise.all([
-    readFile(path.join(PROJECT_ROOT, "package.json"), "utf8"),
-    readFile(path.join(PROJECT_ROOT, "package-lock.json"), "utf8"),
-    readFile(path.join(PROJECT_ROOT, "CHANGELOG.md"), "utf8"),
+    readFile(path.join(projectRoot, "package.json"), "utf8"),
+    readFile(path.join(projectRoot, "package-lock.json"), "utf8"),
+    readFile(path.join(projectRoot, "CHANGELOG.md"), "utf8"),
   ])
   return Object.freeze({
     changelog,
     packageJson: JSON.parse(packageSource),
     packageLock: JSON.parse(lockSource),
   })
+}
+
+function nextChangelog(changelog, previousVersion, version, date) {
+  const unreleased = /^## \[Unreleased\]\n([\s\S]*?)(?=^## \[)/m.exec(changelog)
+  const comparison = `[Unreleased]: ${COMPARISON_BASE}v${previousVersion}...HEAD`
+  if (!unreleased || changelog.match(/^## \[Unreleased\]$/gm)?.length !== 1 || !/^- \S/m.test(unreleased[1])
+    || changelog.split(comparison).length !== 2 || releaseHeading(version).test(changelog)) {
+    throw new ReleaseError("Changelog requires nonempty Unreleased entries and one matching comparison link")
+  }
+  return changelog.replace(unreleased[0], `## [Unreleased]\n\n## [${version}] - ${date}\n\n${unreleased[1].trim()}\n\n`)
+    .replace(comparison, `[Unreleased]: ${COMPARISON_BASE}v${version}...HEAD\n[${version}]: ${COMPARISON_BASE}v${previousVersion}...v${version}`)
+}
+
+export async function prepareRelease(tag, {
+  projectRoot = PROJECT_ROOT,
+  runCommand = run,
+  clock = Date.now,
+} = {}) {
+  if (typeof tag !== "string" || !STABLE_TAG_PATTERN.test(tag)) {
+    throw new ReleaseError("prepare requires --tag vX.Y.Z with a stable version")
+  }
+  const command = (program, args) => runCommand(program, args, { cwd: projectRoot })
+  const cleanHead = async () => {
+    const branch = await command("git", ["branch", "--show-current"])
+    if (branch.stdout.trim() !== RELEASE_BRANCH) throw new ReleaseError("Version preparation requires main")
+    const status = await command("git", ["status", "--porcelain=v1", "--untracked-files=all"])
+    if (status.stdout) throw new ReleaseError("Version preparation requires a clean working tree")
+    return (await command("git", ["rev-parse", "HEAD"])).stdout.trim()
+  }
+  const head = await cleanHead()
+  const requireNewTag = async () => {
+    if ((await command("git", ["tag", "--list", tag])).stdout.trim()) {
+      throw new ReleaseError("Release tag already exists locally")
+    }
+  }
+  const metadata = await readProjectMetadata(projectRoot)
+  const issues = validateReleaseMetadata(metadata.packageJson, metadata.packageLock, metadata.changelog)
+  if (issues.length) throw new ReleaseError(issues.join("; "))
+  const version = tag.slice(1)
+  const previousVersion = metadata.packageJson.version
+  const parts = version.split(".").map(BigInt)
+  const previous = previousVersion.split("-")[0].split(".").map(BigInt)
+  const changed = parts.findIndex((part, index) => part !== previous[index])
+  if (changed === -1 ? !previousVersion.includes("-") : parts[changed] < previous[changed]) {
+    throw new ReleaseError("Prepared version must be greater than the package version")
+  }
+  await requireNewTag()
+  const changelog = nextChangelog(metadata.changelog, previousVersion, version, new Date(clock()).toISOString().slice(0, 10))
+  await command("npm", ["run", "check"])
+  if (await cleanHead() !== head) throw new ReleaseError("Git HEAD changed during release checks")
+  await requireNewTag()
+  await command("npm", ["version", version, "--no-git-tag-version", "--ignore-scripts"])
+  await writeFile(path.join(projectRoot, "CHANGELOG.md"), changelog, "utf8")
+  return Object.freeze({ version, tag })
 }
 
 async function inspectArchive() {
@@ -454,7 +522,10 @@ export async function main(argv = process.argv.slice(2), streams = {}) {
     return EXIT.SUCCESS
   }
   try {
-    if (parsed.command === COMMAND.CHECK) {
+    if (parsed.command === COMMAND.PREPARE) {
+      const prepared = await prepareRelease(parsed.tag)
+      stdout.write(`Prepared ${prepared.tag}; review and commit package.json, package-lock.json, and CHANGELOG.md\n`)
+    } else if (parsed.command === COMMAND.CHECK) {
       const validated = await checkRelease(parsed.tag)
       stdout.write(
         `Release checks passed for ${validated.metadata.packageJson.name}`

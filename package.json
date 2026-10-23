@@ -53,6 +53,7 @@
     "dev": "wrangler dev",
     "release:build": "npm run check && node scripts/release.mjs build",
     "release:check": "node scripts/release.mjs check",
+    "release:prepare": "node scripts/release.mjs prepare",
     "test": "node --test test/*.test.mjs",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=test/** --test-coverage-exclude=scripts/capture-cover.mjs --test-coverage-exclude=scripts/release.mjs --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-lines=90 test/*.test.mjs",
     "test:watchdog": "python3 -B -m unittest discover -s watchdog -p 'test_*.py'"
