@@ -30,9 +30,21 @@ import { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
 import { handleManagement } from "./management.mjs"
 import { MANAGEMENT_PATH } from "./management-contract.mjs"
 import { d1ConfigurationQuery } from "./configuration-authority.mjs"
-import { executionEvidence, readRunSnapshots, targetCheckEvidence, writeRunStatus } from "./run-status.mjs"
+import { executionEvidence, readRunSnapshots, RUN_PHASES, targetCheckEvidence, writeRunStatus } from "./run-status.mjs"
 
 export { CLOUDFLARE_RUNTIME_LIMITS } from "./runtime-limits.mjs"
+
+const SAFE_ERROR_CODES = new Set([
+  "invalid-scheduled-time", "invalid-runtime-time", "invalid-runtime-flag",
+  "monitor-database-unavailable", "monitor-configuration-unavailable",
+  "monitor-configuration-invalid", "monitor-configuration-metadata-invalid",
+  "cloudflare-account-id-unavailable", "cloudflare-api-token-unavailable",
+  "hookrelay-hmac-unavailable", "hookrelay-url-unavailable", "status-token-unavailable",
+  "cloudflare-analytics-rows-unavailable", "cloudflare-analytics-result-truncated",
+  "cloudflare-zones-failed", "cloudflare-zones-failed-invalid-json", "cloudflare-zones-invalid",
+  "cloudflare-zones-pagination-invalid", "cloudflare-graphql-failed",
+  "cloudflare-graphql-failed-invalid-json", "cloudflare-graphql-invalid", "run-status-invalid",
+])
 
 function timestamp(value, code) {
   const milliseconds = value instanceof Date ? value.getTime() : Number(value)
@@ -52,8 +64,7 @@ function fixedErrorCode(error, fallback) {
   if (error instanceof SubrequestBudgetError) {
     return "subrequest-budget-exhausted"
   }
-  return typeof error?.code === "string"
-    && /^[a-z][a-z0-9-]{0,63}$/.test(error.code)
+  return SAFE_ERROR_CODES.has(error?.code)
     ? error.code
     : fallback
 }
@@ -62,6 +73,33 @@ function emit(logger, level, event, fields = {}) {
   const output = logger?.[level]
   if (typeof output !== "function") return
   output.call(logger, Object.freeze({ event, ...fields }))
+}
+
+function runTelemetry(logger, monotonicClock, runId) {
+  const started = monotonicClock()
+  let phaseStarted = started
+  let phase = RUN_PHASES.CONFIGURATION
+  const phaseDurationsMilliseconds = {}
+  const elapsed = (since) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(monotonicClock() - since)))
+  const diagnostics = () => ({
+    runId, phase, elapsedMilliseconds: elapsed(started),
+    phaseElapsedMilliseconds: phaseDurationsMilliseconds[phase] ?? elapsed(phaseStarted),
+    phaseDurationsMilliseconds: { ...phaseDurationsMilliseconds },
+  })
+  return {
+    runId,
+    phaseDurationsMilliseconds,
+    diagnostics,
+    logger: Object.fromEntries(["log", "error"].map((level) => [level, ({ event, ...fields }) => {
+      emit(logger, level, event, { ...fields, ...diagnostics() })
+    }])),
+    async measure(nextPhase, operation) {
+      phase = nextPhase
+      phaseStarted = monotonicClock()
+      try { return await operation() }
+      finally { phaseDurationsMilliseconds[phase] = elapsed(phaseStarted) }
+    },
+  }
 }
 
 function setState(states, targetId, state) {
@@ -99,7 +137,6 @@ async function runAnalytics(
   summary,
   randomUUID,
 ) {
-  if (!settings.analyticsEnabled) return
   const api = new CloudflareApi({
     accountId: settings.analytics.accountId,
     apiToken: settings.analytics.apiToken,
@@ -152,7 +189,6 @@ async function runDelivery(
   logger,
   summary,
 ) {
-  if (!settings.deliveryEnabled) return
   const bridged = await enqueueUndeliveredOpenIncidents(settings.db, runAt)
   summary.d1Writes += bridged.writes
   summary.deliveryBridged = bridged.incidents.length
@@ -225,37 +261,29 @@ function newSummary(scheduledAt, settings) {
   }
 }
 
-export async function runCloudflareScheduled(
-  env,
-  scheduledTime,
-  {
-    clock = Date.now,
-    fetchImpl = globalThis.fetch,
-    logger = console,
-    randomUUID = () => crypto.randomUUID(),
-  } = {},
-) {
-  const scheduledAt = timestamp(scheduledTime, "invalid-scheduled-time")
-  const settings = readRuntimeSettings(env)
+async function executeScheduled(env, scheduledAt, startedAt, telemetry, { clock, fetchImpl, randomUUID }) {
+  const logger = telemetry.logger
+  const { settings, loaded } = await telemetry.measure(RUN_PHASES.CONFIGURATION, async () => {
+    const settings = readRuntimeSettings(env)
+    return { settings, loaded: settings.enabled ? await loadStoredConfiguration(settings.db) : null }
+  })
   const summary = newSummary(scheduledAt, settings)
   if (!settings.enabled) {
     if (settings.db) {
-      const startedAt = timestamp(clock(), "invalid-runtime-time")
-      summary.runStatusWrites = await writeRunStatus(settings.db, {
+      summary.runStatusWrites = await telemetry.measure(RUN_PHASES.RUN_STATUS, () => writeRunStatus(settings.db, {
         scheduledAt, startedAt, completedAt: timestamp(clock(), "invalid-runtime-time"), summary,
-      })
+        runId: telemetry.runId, phaseDurationsMilliseconds: { ...telemetry.phaseDurationsMilliseconds },
+      }))
       summary.d1Writes += summary.runStatusWrites
     }
-    emit(logger, "log", "endpoint_monitor.run", summary)
-    return Object.freeze(summary)
+    return summary
   }
-  const runAt = timestamp(clock(), "invalid-runtime-time")
-  const loaded = await loadStoredConfiguration(settings.db)
-  const reconciliation = await reconcileTargetConfiguration(
+  const runAt = startedAt
+  const reconciliation = await telemetry.measure(RUN_PHASES.RECONCILIATION, () => reconcileTargetConfiguration(
     settings.db,
     loaded.targets,
     runAt,
-  )
+  ))
   summary.d1Writes += reconciliation.writes
   summary.targetCount = loaded.targets.length
   const states = new Map(
@@ -272,41 +300,43 @@ export async function runCloudflareScheduled(
     fetchImpl,
     CLOUDFLARE_RUNTIME_LIMITS.externalSubrequests,
   )
-  const probes = await probeTargets(
+  const probes = await telemetry.measure(RUN_PHASES.PROBING, () => probeTargets(
     budget.fetch,
     schedule.due,
     () => timestamp(clock(), "invalid-runtime-time"),
     CLOUDFLARE_RUNTIME_LIMITS.probeConcurrency,
-  )
+  ))
   const probeSummary = summarizeProbeResults(probes)
   summary.failedProbes = probeSummary.failed
   summary.succeededProbes = probeSummary.succeeded
   const latestProbes = new Map()
-  for (const entry of probes) {
-    latestProbes.set(entry.target.id, entry.observation)
-    const recorded = await recordObservation(
-      settings.db,
-      entry.target,
-      entry.observation,
-      {
-        currentState: states.get(entry.target.id) || null,
-        enqueueEvents: settings.deliveryEnabled,
-        incidentId: entry.observation.outcome === OBSERVATION_OUTCOME.FAILURE
-          ? randomUUID()
-          : null,
-        recordedAt: runAt,
-      },
-    )
-    setState(states, entry.target.id, recorded.state)
-    summary.d1Writes += recorded.writes
-    if (recorded.transition) summary.transitions += 1
-    emitTransition(logger, recorded, "probe")
-  }
-  if (intervalIsDue(
+  await telemetry.measure(RUN_PHASES.PERSISTENCE, async () => {
+    for (const entry of probes) {
+      latestProbes.set(entry.target.id, entry.observation)
+      const recorded = await recordObservation(
+        settings.db,
+        entry.target,
+        entry.observation,
+        {
+          currentState: states.get(entry.target.id) || null,
+          enqueueEvents: settings.deliveryEnabled,
+          incidentId: entry.observation.outcome === OBSERVATION_OUTCOME.FAILURE
+            ? randomUUID()
+            : null,
+          recordedAt: runAt,
+        },
+      )
+      setState(states, entry.target.id, recorded.state)
+      summary.d1Writes += recorded.writes
+      if (recorded.transition) summary.transitions += 1
+      emitTransition(logger, recorded, "probe")
+    }
+  })
+  if (settings.analyticsEnabled && intervalIsDue(
     scheduledAt,
     CLOUDFLARE_RUNTIME_LIMITS.analyticsIntervalMinutes,
   )) {
-    await runAnalytics(
+    await telemetry.measure(RUN_PHASES.ANALYTICS, () => runAnalytics(
       settings,
       loaded.targets,
       states,
@@ -316,23 +346,57 @@ export async function runCloudflareScheduled(
       logger,
       summary,
       randomUUID,
-    )
+    ))
   }
-  await runDelivery(env, settings, runAt, budget, logger, summary)
+  if (settings.deliveryEnabled) await telemetry.measure(RUN_PHASES.DELIVERY,
+    () => runDelivery(env, settings, runAt, budget, logger, summary))
   if (intervalIsDue(
     scheduledAt,
     CLOUDFLARE_RUNTIME_LIMITS.maintenanceIntervalMinutes,
   )) {
-    await runMaintenance(settings, runAt, summary)
+    await telemetry.measure(RUN_PHASES.MAINTENANCE, () => runMaintenance(settings, runAt, summary))
   }
-  summary.runStatusWrites = await writeRunStatus(settings.db, {
+  summary.runStatusWrites = await telemetry.measure(RUN_PHASES.RUN_STATUS, () => writeRunStatus(settings.db, {
     scheduledAt, startedAt: runAt, completedAt: timestamp(clock(), "invalid-runtime-time"),
+    runId: telemetry.runId, phaseDurationsMilliseconds: { ...telemetry.phaseDurationsMilliseconds },
     loaded, probes, summary: { ...summary, subrequests: budget.used },
-  })
+  }))
   summary.d1Writes += summary.runStatusWrites
-  const complete = Object.freeze({ ...summary, subrequests: budget.used })
-  emit(logger, "log", "endpoint_monitor.run", complete)
-  return complete
+  return { ...summary, subrequests: budget.used }
+}
+
+export async function runCloudflareScheduled(env, scheduledTime, {
+  clock = Date.now,
+  monotonicClock = () => performance.now(),
+  fetchImpl = globalThis.fetch,
+  logger = console,
+  randomUUID = () => crypto.randomUUID(),
+  randomRunId = () => crypto.randomUUID(),
+} = {}) {
+  const telemetry = runTelemetry(logger, monotonicClock, randomRunId())
+  let startedAt = null
+  let scheduledAt = null
+  try {
+    startedAt = timestamp(clock(), "invalid-runtime-time")
+    scheduledAt = timestamp(scheduledTime, "invalid-scheduled-time")
+    emit(telemetry.logger, "log", "endpoint_monitor.run_start", {
+      scheduledAt, startedAt,
+      schedulerDelayMilliseconds: Math.max(0, Date.parse(startedAt) - Date.parse(scheduledAt)),
+    })
+    const summary = await executeScheduled(env, scheduledAt, startedAt, telemetry, { clock, fetchImpl, randomUUID })
+    const complete = Object.freeze({ ...summary, runId: telemetry.runId, startedAt,
+      durationMilliseconds: telemetry.diagnostics().elapsedMilliseconds,
+      phaseDurationsMilliseconds: Object.freeze({ ...telemetry.phaseDurationsMilliseconds }),
+    })
+    emit(telemetry.logger, "log", "endpoint_monitor.run", complete)
+    return complete
+  } catch (error) {
+    const errorCode = fixedErrorCode(error, "runtime-failed")
+    emit(telemetry.logger, "error", "endpoint_monitor.runtime_error", { errorCode, scheduledAt, startedAt })
+    const safe = new Error(errorCode)
+    safe.code = errorCode
+    throw safe
+  }
 }
 
 function responseBody(body, status, method, headers = {}) {
@@ -447,14 +511,5 @@ export async function handleCloudflareRequest(
 }
 
 export async function runCloudflareScheduledSafely(env, scheduledTime, options = {}) {
-  const logger = options.logger || console
-  try {
-    return await runCloudflareScheduled(env, scheduledTime, options)
-  } catch (error) {
-    const errorCode = fixedErrorCode(error, "runtime-failed")
-    emit(logger, "error", "endpoint_monitor.runtime_error", { errorCode })
-    const safe = new Error(errorCode)
-    safe.code = errorCode
-    throw safe
-  }
+  return runCloudflareScheduled(env, scheduledTime, options)
 }

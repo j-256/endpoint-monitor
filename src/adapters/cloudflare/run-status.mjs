@@ -11,6 +11,17 @@ export const RUN_STATUS_LIMITS = Object.freeze({
 const FINGERPRINT = /^sha256:[a-f0-9]{64}$/
 const TARGET_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const ERROR_CODE = /^[a-z][a-z0-9-]{0,63}$/
+const RUN_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
+export const RUN_PHASES = Object.freeze({
+  CONFIGURATION: "configuration",
+  RECONCILIATION: "reconciliation",
+  PROBING: "probing",
+  PERSISTENCE: "persistence",
+  ANALYTICS: "analytics",
+  DELIVERY: "delivery",
+  MAINTENANCE: "maintenance",
+  RUN_STATUS: "run-status",
+})
 const SUMMARY_LIMITS = Object.freeze({
   targetCount: RUN_STATUS_LIMITS.maximumTargets,
   dueTargets: CLOUDFLARE_RUNTIME_LIMITS.maximumProbesPerRun,
@@ -70,15 +81,30 @@ function checkedSnapshot(value) {
       observedAt: check.observedAt, outcome: check.outcome, status: check.status, errorCode: check.errorCode }
   })
   if (checks.filter((check) => check.outcome === OBSERVATION_OUTCOME.SUCCESS).length !== summary.succeededProbes) invalid()
+  const telemetry = {}
+  if (value.runId !== undefined) {
+    if (typeof value.runId !== "string" || !RUN_ID.test(value.runId)) invalid()
+    telemetry.runId = value.runId
+  }
+  if (value.phaseDurationsMilliseconds !== undefined) {
+    if (!value.phaseDurationsMilliseconds || typeof value.phaseDurationsMilliseconds !== "object"
+      || Array.isArray(value.phaseDurationsMilliseconds)) invalid()
+    telemetry.phaseDurationsMilliseconds = {}
+    for (const [phase, duration] of Object.entries(value.phaseDurationsMilliseconds)) {
+      if (!Object.values(RUN_PHASES).includes(phase)) invalid()
+      telemetry.phaseDurationsMilliseconds[phase] = integer(duration, 0, Number.MAX_SAFE_INTEGER)
+    }
+  }
   return { scheduledAt: value.scheduledAt, startedAt: value.startedAt, completedAt: value.completedAt,
     enabled: value.enabled, configurationRevision: value.configurationRevision,
     configFingerprint: value.configFingerprint, probeIntervalMinutes: value.probeIntervalMinutes,
-    ...summary, checks }
+    ...summary, ...telemetry, checks }
 }
 
-export async function writeRunStatus(db, { scheduledAt, startedAt, completedAt, loaded = null, probes = [], summary }) {
+export async function writeRunStatus(db, { scheduledAt, startedAt, completedAt, runId, phaseDurationsMilliseconds,
+  loaded = null, probes = [], summary }) {
   const snapshot = checkedSnapshot({
-    scheduledAt, startedAt, completedAt, enabled: summary.enabled,
+    scheduledAt, startedAt, completedAt, runId, phaseDurationsMilliseconds, enabled: summary.enabled,
     configurationRevision: loaded?.revision ?? null,
     configFingerprint: loaded?.configFingerprint ?? null,
     probeIntervalMinutes: loaded?.configuration.defaults.probeIntervalMinutes ?? null,
@@ -128,6 +154,11 @@ export function executionEvidence(snapshots, now) {
     freshUntil,
     expectedIntervalSeconds: RUN_STATUS_LIMITS.intervalMilliseconds / 1000,
     retainedRunLimit: RUN_STATUS_LIMITS.slots,
+    timing: latest ? {
+      schedulerDelayMilliseconds: Date.parse(latest.startedAt) - Date.parse(latest.scheduledAt),
+      durationMilliseconds: Date.parse(latest.completedAt) - Date.parse(latest.startedAt),
+      ageSeconds: Math.max(0, (time(now) - Date.parse(latest.scheduledAt)) / 1000),
+    } : null,
     lastRun: latest ? lastRun : null,
   }
 }

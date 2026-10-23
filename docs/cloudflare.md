@@ -79,14 +79,19 @@ The example enables Workers Logs and invocation logs. Platform invocation record
 
 | Event | Level | Purpose |
 | --- | --- | --- |
-| `endpoint_monitor.run` | Info | One bounded per-invocation summary |
+| `endpoint_monitor.run_start` | Info | Correlated invocation start before configuration or D1 loading |
+| `endpoint_monitor.run` | Info | One bounded completion summary, after the aggregate run-status write |
 | `endpoint_monitor.transition` | Info | Incident opened or recovered |
 | `endpoint_monitor.phase_error` | Error | Optional analytics phase failed |
 | `endpoint_monitor.delivery_failed` | Error | One outbox attempt failed |
 | `endpoint_monitor.runtime_error` | Error | Critical scheduled invocation failure |
 | `endpoint_monitor.management_failed` | Warning | Fixed management failure requiring availability or receipt inspection |
 
-The run summary includes scheduled time, configured and due target counts, probe outcomes, analytics row and match counts, transition count, D1 logical changes, `runStatusWrites`, delivery outcomes, retention count, phase errors, and budgeted subrequests. It intentionally excludes full URLs and raw exception text.
+Scheduled-run events carry a `runId` that also appears in the completed snapshot. The start event includes scheduled time, actual start time, and `schedulerDelayMilliseconds`. The completion summary adds monotonic `durationMilliseconds`, bounded `phaseDurationsMilliseconds`, configured and due target counts, probe outcomes, analytics row and match counts, transition count, D1 logical changes, `runStatusWrites`, delivery outcomes, retention count, phase errors, and budgeted subrequests. It excludes full URLs, arbitrary exception codes, and raw exception text.
+
+Phase names are fixed: `configuration`, `reconciliation`, `probing`, `persistence`, `analytics`, `delivery`, `maintenance`, and `run-status`. Skipped optional phases are omitted. Configuration timing starts before runtime settings and stored targets load. Failure events include the run ID, failing phase, monotonic elapsed and phase elapsed milliseconds, completed or failed phase durations, and a fixed error code. A start without completion can indicate cancellation, a resource limit, or an unavailable log record; it does not establish a particular cause. Use the platform invocation outcome and CPU/wall timing to investigate. There are no healthy per-target log events.
+
+Run-start telemetry adds one bounded aggregate application log event per scheduled invocation. At the configured one-minute cadence this projects 1,440 additional application events per day, excluding platform invocation records, status requests, incidents, and failures. Phase durations travel in aggregate completion/error events instead of separate per-phase records. No provider resource or healthy per-target durable write is added. Representative CPU and log-ingestion allowance compliance still requires measurement for the deployed target set; the existing Paid requirement and unverified Free fallback remain in effect.
 
 Use the Worker name as the primary Observability filter, then filter the structured `event` field. A normal steady-state scheduled minute has `runStatusWrites: 1` and `d1Writes: 1`; duplicate completion for the same minute adds no snapshot write. Investigate other repeated changes without configuration, incident, delivery, or retention activity. The incident engine still writes no per-target state for ordinary healthy probes.
 
@@ -95,6 +100,8 @@ Use the Worker name as the primary Observability filter, then filter the structu
 Apply the additive run-status migration before deploying a Worker that publishes snapshots. It does not edit targets, incidents, or credentials. Keep the database backup and previous artifact. Rolling back the Worker preserves the additive table, but completion evidence becomes stale when older code stops publishing it; do not mistake rollback liveness for monitoring evidence.
 
 Use `endpoint-monitor status` or `endpoint-monitor status --json` for scheduler completion and configuration-bound target checks without probing targets or opening the local target file. The [management freshness contract](management.md#freshness-and-recovery) specifies deadlines, disabled runs, revision matching, retained passes, and late/duplicate completion behavior. `/healthz` proves only that the HTTP handler responded. It does not prove the cron trigger fired.
+
+The status CLI displays scheduler delay, execution duration, and age since the scheduled time separately. JSON exposes them under `execution.timing`; old snapshots without a run ID or phase timings remain readable. Snapshot execution duration uses its existing started/completed timestamps and ends immediately before the aggregate persistence attempt. Its phase timings omit `run-status`, whose duration cannot be known before that same write. The completion log includes the full monotonic execution duration and run-status write timing without adding another durable write. Neither a late completion nor these diagnostic fields extend the freshness deadline.
 
 Run-status storage has fixed capacity and one aggregate upsert per completed minute, regardless of whether zero or the bounded maximum targets were due. An uninterrupted minute schedule therefore adds at most 1,440 successful snapshot changes per day, excluding all other runtime and management work. This is an application-write projection, not a billable D1 row-write estimate: index accounting, read scans, CPU, and logs require measurement. Scheduled runs add no extra network requests or per-check log events for snapshots. Reads inspect at most the fixed ring and return bounded target pages. Workers Free CPU and aggregate D1/log allowance compliance for representative target sets remains unmeasured; Paid access does not make this feature Free-plan verified. Document measured overages before increasing these bounds.
 

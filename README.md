@@ -12,7 +12,7 @@ Traffic, DNS inventory, and provider metadata do not define what should be monit
 
 ## Independent watchdog
 
-Install the optional [Unix cron watchdog](watchdog/README.md) on hosting outside Cloudflare to detect missing scheduled runs and status failures. It sends Gmail alerts and recovery notifications, retries failed mail, and emits a daily healthy heartbeat. The observer uses Python's standard library and a dedicated read-only status token.
+Install the optional [Unix cron watchdog](watchdog/README.md) on hosting outside Cloudflare to detect missing scheduled runs and status failures. It sends Gmail alerts and recovery notifications, retries failed mail, groups flapping failures until stable recovery, and emits a daily healthy heartbeat. Its read-only report retains bounded incident evidence and daily diagnostic aggregates. The observer uses Python's standard library and a dedicated read-only status token.
 
 ## Installation
 

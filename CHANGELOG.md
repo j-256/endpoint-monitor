@@ -6,12 +6,15 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ### Added
 
+- Correlated Worker run starts, bounded phase diagnostics, and separate scheduler delay, execution duration, and scheduled age
+- Read-only watchdog reports with bounded incident evidence, daily aggregates, transport diagnostics, and sampling/mail outcomes
 - Independent Unix cron watchdog with protected status polling, Gmail alerts and recovery, notification retry, bounded diagnostics, and daily healthy heartbeats
 - Fixed-capacity scheduled-run snapshots with configuration-bound check outcomes, retained passes, and separate scheduler and target freshness
 - Read-only `status` CLI and shared protected management/status evidence without probing targets or reading a local candidate
 
 ### Changed
 
+- Watchdog recovery requires stable observed health to group flapping failures while preserving freshness and problem thresholds
 - Healthy scheduled runs persist only their bounded aggregate completion snapshot while the incident engine retains no ordinary healthy per-target state
 
 ## [0.2.1] - 2026-08-29
