@@ -6,6 +6,7 @@ import copy
 import datetime
 import email.message
 import email.utils
+import html
 import http.client
 import json
 import logging
@@ -26,6 +27,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
+from http import HTTPStatus
 
 try:
     import fcntl
@@ -71,6 +73,36 @@ EVIDENCE_KEYS = frozenset(("lastHealthy", "firstFailure", "worstFailure", "lates
 INCIDENT_FIELDS = frozenset(("id", "openedAt", "reason", "problemSentAt", "lastAlertAt", "recoveredAt"))
 DAILY_COUNTERS = ("samples", "healthy", "unhealthy", "skipped", "notificationsAccepted", "notificationsFailed")
 DAILY_MAXIMA = ("maximumAgeSeconds", "maximumSchedulerDelayMilliseconds", "maximumSampleGapSeconds")
+MAIL_EVENTS = {"PROBLEM": ("Monitor needs attention", "#b42318"),
+               "REMINDER": ("Monitor still needs attention", "#92400e"),
+               "RECOVERY": ("Monitor recovered", "#067647"),
+               "HEARTBEAT": ("Monitor healthy", "#175cd3")}
+DURATION_UNITS = ((SECONDS_PER_DAY, "day"), (3600, "hour"), (60, "minute"), (1, "second"))
+REASON_DESCRIPTIONS = {
+    "fresh": "The watchdog is running and the monitor has fresh completed-run evidence.",
+    "monitor-disabled": "Monitoring is disabled in the status endpoint's active configuration.",
+    "delivery-disabled": "Alert delivery is disabled in the status endpoint's active configuration.",
+    "run-unobserved": "No completed monitor run has been observed by the status endpoint.",
+    "run-clock-invalid": "The monitor's run timestamps are out of order or ahead of the watchdog clock by more than {clock_skew}.",
+    "response-clock-invalid": "The status response time differs from the watchdog clock by more than {clock_skew}.",
+    "run-cadence-invalid": "The reported run cadence or freshness deadline does not match the expected schedule.",
+    "run-stale": "No fresh completed monitor run is available. The freshness limit is {freshness} from scheduled time.",
+    "run-disabled": "The latest completed run was recorded with monitoring disabled.",
+    "no-targets": "The latest completed monitor run reported no targets to check.",
+    "configuration-not-observed": "The latest completed run does not match the monitor's active configuration.",
+    "monitor-phase-error": "The latest completed monitor run reported processing errors.",
+    "monitor-delivery-error": "The latest completed monitor run reported failed alert deliveries.",
+    "status-schema-invalid": "The status endpoint returned missing or invalid monitoring data.",
+    "status-credential-invalid": "The watchdog could not read a valid status token from its local credential file.",
+    "status-media-type-invalid": "The status endpoint returned a content type other than application/json.",
+    "status-response-too-large": "The status response exceeded the watchdog's {maximum_kib:g} KiB size limit.",
+    "http-timeout": "The status request timed out; its socket timeout is {timeout}.",
+    "http-network-error": "The watchdog's network request to the status endpoint failed.",
+    "dns-error": "The watchdog could not resolve the status endpoint's hostname.",
+    "tls-error": "The watchdog could not establish a secure TLS connection to the status endpoint.",
+    "status-json-invalid": "The status endpoint's response could not be read as valid UTF-8 JSON.",
+    "unknown-error": "The watchdog could not confirm monitor health because of an unrecognized error.",
+}
 
 
 def finite_number(value, maximum=1e12):
@@ -674,38 +706,136 @@ def acknowledge(state, event, now):
     daily_entry(state, now)["notificationsAccepted"] += 1
 
 
+def mail_duration(seconds):
+    remaining = round(seconds, 3)
+    parts = []
+    for size, unit in DURATION_UNITS:
+        count = remaining if size == 1 else int(remaining // size)
+        remaining = round(remaining - count * size, 3)
+        if count:
+            parts.append("{:g} {}{}".format(count, unit, "" if count == 1 else "s"))
+    return " ".join(parts) or "0 seconds"
+
+
+def mail_time(value):
+    return datetime.datetime.fromtimestamp(value, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def mail_reason(result):
+    reason = safe_observation(result)["reason"]
+    if reason.startswith("http-") and reason[5:].isdigit():
+        try:
+            meaning = HTTPStatus(int(reason[5:])).phrase
+        except ValueError:
+            meaning = "unrecognized status code"
+        explanation = "The status endpoint returned HTTP " + reason[5:] + " (" + meaning + ")."
+        if reason == "http-401":
+            explanation += " It may have rejected the watchdog's status token."
+        elif reason == "http-403":
+            explanation += " It refused access to the watchdog."
+        elif reason.startswith("http-3"):
+            explanation += " Redirects are not followed."
+        return explanation
+    description = REASON_DESCRIPTIONS[reason].format(freshness=mail_duration(MAX_AGE_SECONDS),
+                                                    clock_skew=mail_duration(CLOCK_SKEW_SECONDS),
+                                                    timeout=mail_duration(HTTP_TIMEOUT_SECONDS),
+                                                    maximum_kib=MAX_RESPONSE_BYTES / 1024)
+    result = safe_observation(result)
+    if reason == "run-stale" and "ageSeconds" in result:
+        description += " At the failing observation, the latest recorded run was scheduled " + mail_duration(result["ageSeconds"]) + " earlier."
+    return description
+
+
 def mail_message(config, event):
     message = email.message.EmailMessage()
     message["From"] = "Monitor Watchdog <" + config["sender"] + ">"
     message["To"] = config["recipient"]
     message["Date"] = email.utils.format_datetime(datetime.datetime.fromtimestamp(event["createdAt"], UTC))
     message["Message-ID"] = "<watchdog-" + event["id"] + "@gmail.com>"
-    message["Subject"] = "[" + config["label"] + "] " + event["kind"]
-    lines = ["Independent Endpoint Monitor watchdog", "Event: " + event["kind"], "Observed: " + utc(event["createdAt"])]
-    if event["incident"]:
-        incident = event["incident"]
-        lines += ["Incident: " + incident["id"], "First failure: " + utc(incident["openedAt"]), "Reason: " + incident["reason"]]
+    title, color = MAIL_EVENTS[event["kind"]]
+    message["Subject"] = "[" + config["label"] + "] " + event["kind"] + ": " + title
+    incident = event["incident"]
+    result = safe_observation(event["observation"])
+    reason = result
+    if incident:
+        reason = safe_observation(incident)
+        failure = safe_observation(incident.get("evidence", {}).get("latestFailure") or {})
+        if failure["reason"] == reason["reason"]:
+            reason = failure
+        elif not result["healthy"] and result["reason"] == reason["reason"]:
+            reason = result
+    summary = mail_reason(reason)
+    if event["kind"] == "RECOVERY":
+        summary = "The monitor has remained healthy for at least " + mail_duration(RECOVERY_STABLE_SECONDS) + ". Recovery is confirmed."
+    elif event["kind"] == "REMINDER":
+        summary = "The incident is still open. " + summary
+    paragraphs = [summary]
+    if incident and event["kind"] == "RECOVERY" and incident["problemSentAt"] is None:
+        paragraphs.append("Recovered before an outage email was acknowledged; this is the outage summary.")
+    sections = []
+    if incident:
+        if event["kind"] == "RECOVERY":
+            sections.append(("Previous problem", [("Explanation", mail_reason(reason))]))
+        rows = [("First failure", mail_time(incident["openedAt"]))]
         if incident["recoveredAt"] is not None:
-            lines.append("Recovered: " + utc(incident["recoveredAt"]))
-            if incident["problemSentAt"] is None:
-                lines.append("Recovered before an outage email was acknowledged; this is the outage summary.")
-    else:
-        lines.append("The watchdog is running and the monitor has fresh completed-run evidence.")
-    for key in ("scheduledAt", "startedAt", "completedAt", "freshUntil", "ageSeconds", "schedulerDelayMilliseconds",
-                "durationMilliseconds", "runId", "configurationRevision", "httpStatus", "httpElapsedMilliseconds", "cfRay"):
-        if key in event["observation"]:
-            lines.append(key + ": " + str(event["observation"][key]))
-    if event["incident"]:
-        incident = event["incident"]
-        worst = incident.get("evidence", {}).get("worstFailure") or {}
-        lines.append("Recorded failing samples in this episode: " + str(incident.get("failureSamples", 0)))
+            rows.append(("Recovery confirmed", mail_time(incident["recoveredAt"])))
+        if "failureSamples" in incident:
+            rows.append(("Failing observations", str(incident["failureSamples"])))
+        worst = safe_observation(incident.get("evidence", {}).get("worstFailure") or {})
         if "ageSeconds" in worst:
-            lines.append("Worst recorded run age (seconds): " + str(worst["ageSeconds"]))
-    lines += ["", "This observer checks monitor execution and delivery errors; it does not repeat individual target alerts.",
-              "Recovery requires five minutes of stable observed health. Healthy heartbeats are sent daily.",
-              "A missing heartbeat can indicate a watchdog, hosting, or mail failure.",
-              "Event ID: " + event["id"]]
+            rows.append(("Worst recorded run age", mail_duration(worst["ageSeconds"])))
+        sections.append(("Incident", rows))
+    rows = [("Observed", mail_time(event["createdAt"]))]
+    for key, label in (("scheduledAt", "Run scheduled"), ("startedAt", "Run started"),
+                       ("completedAt", "Run completed"), ("freshUntil", "Freshness deadline")):
+        if key in result:
+            rows.append((label, mail_time(timestamp(result[key]))))
+    for key, label, divisor in (("ageSeconds", "Run age at observation", 1),
+                                ("schedulerDelayMilliseconds", "Scheduler delay", 1000),
+                                ("durationMilliseconds", "Run duration", 1000),
+                                ("httpElapsedMilliseconds", "Status request duration", 1000)):
+        if key in result:
+            rows.append((label, mail_duration(result[key] / divisor)))
+    for key, label in (("targetCount", "Configured targets"), ("phaseErrors", "Processing errors"),
+                       ("deliveriesFailed", "Failed alert deliveries"), ("httpStatus", "HTTP status")):
+        if key in result:
+            rows.append((label, str(result[key])))
+    sections.append(("Observation", rows))
+    rows = [("Reason code", reason["reason"])]
+    if result["reason"] != reason["reason"]:
+        rows.append(("Observation code", result["reason"]))
+    for key, label in (("runId", "Monitor run ID"), ("configurationRevision", "Configuration revision"), ("cfRay", "Cloudflare request ID")):
+        if key in result:
+            rows.append((label, str(result[key])))
+    if incident:
+        rows.append(("Incident ID", incident["id"]))
+    rows.append(("Event ID", event["id"]))
+    sections.append(("Diagnostic details", rows))
+    footer = ["This independent observer checks monitor execution and delivery errors; it does not repeat individual target alerts.",
+              "Recovery requires " + mail_duration(RECOVERY_STABLE_SECONDS) + " of stable observed health. Healthy heartbeats are sent daily.",
+              "A missing heartbeat can indicate a watchdog, hosting, or mail failure."]
+    lines = [config["label"], title, ""] + paragraphs
+    for heading, rows in sections:
+        lines += ["", heading] + [label + ": " + value for label, value in rows]
+    lines += [""] + footer
     message.set_content("\n".join(lines) + "\n")
+    content = ['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>',
+               '<body style="margin:0;padding:24px 12px;background:#f2f4f7;color:#101828;font-family:Arial,sans-serif;line-height:1.5">',
+               '<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #d0d5dd;border-radius:12px;padding:24px">',
+               '<p style="margin:0;color:#475467;font-size:14px">Independent Endpoint Monitor watchdog</p>',
+               '<p style="margin:12px 0 4px;font-size:14px;font-weight:bold">' + html.escape(config["label"]) + '</p>',
+               '<h1 style="margin:0 0 16px;font-size:26px;color:' + color + '">' + html.escape(title) + '</h1>']
+    content += ['<p>' + html.escape(paragraph) + '</p>' for paragraph in paragraphs]
+    for heading, rows in sections:
+        content.append('<h2 style="margin:24px 0 8px;font-size:17px">' + html.escape(heading) + '</h2>')
+        content.append('<table style="width:100%;border-collapse:collapse;font-size:14px">')
+        for label, value in rows:
+            content.append('<tr><th scope="row" style="padding:8px 12px 8px 0;text-align:left;vertical-align:top;border-bottom:1px solid #eaecf0;color:#475467;font-weight:normal">' + html.escape(label) + '</th><td style="padding:8px 0;vertical-align:top;border-bottom:1px solid #eaecf0;overflow-wrap:anywhere;word-break:break-word">' + html.escape(value) + '</td></tr>')
+        content.append('</table>')
+    content.append('<div style="margin-top:24px;border-top:1px solid #d0d5dd;color:#475467;font-size:12px">')
+    content += ['<p>' + html.escape(paragraph) + '</p>' for paragraph in footer]
+    content.append('</div></div></body></html>')
+    message.add_alternative("\n".join(content) + "\n", subtype="html")
     return message
 
 

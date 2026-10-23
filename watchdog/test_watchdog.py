@@ -1,4 +1,5 @@
 import email.message
+import html as html_lib
 import http.server
 import io
 import json
@@ -121,7 +122,7 @@ class StateTests(unittest.TestCase):
             state = self.advance(state, GOOD, NOW + at)
         self.assertEqual(state["pending"]["kind"], "RECOVERY")
         self.assertIsNone(state["pending"]["incident"]["problemSentAt"])
-        self.assertIn("outage summary", w.mail_message(config(), state["pending"]).get_content())
+        self.assertIn("outage summary", w.mail_message(config(), state["pending"]).get_body(preferencelist=("plain",)).get_content())
 
     def test_rapid_manual_runs_do_not_cross_threshold_and_gaps_reset_counts(self):
         state = self.advance(w.initial_state(), BAD, NOW)
@@ -234,6 +235,115 @@ class StateTests(unittest.TestCase):
 def config():
     return {"label": "Example watchdog", "status_url": "https://monitor.example.com/api/status", "status_token_file": "/unused/status-token",
             "sender": "sender@example.com", "recipient": "recipient@example.com", "smtp_password_file": "/unused/password"}
+
+
+class MailTests(unittest.TestCase):
+    def event(self, result):
+        state, _ = w.advance(w.initial_state(), result, NOW)
+        state, _ = w.advance(state, result, NOW + 60)
+        return state["pending"]
+
+    def bodies(self, event, configuration=None):
+        message = w.mail_message(configuration or config(), event)
+        self.assertEqual(message.get_content_type(), "multipart/alternative")
+        return message, message.get_body(preferencelist=("plain",)).get_content(), message.get_body(preferencelist=("html",)).get_content()
+
+    def test_stale_email_explains_scheduled_freshness_and_readable_timings(self):
+        event = self.event(w.observation(False, "run-stale", ageSeconds=250, schedulerDelayMilliseconds=1250,
+                                        durationMilliseconds=250, scheduledAt=timestamp(NOW - 250)))
+        message, plain, html = self.bodies(event)
+        for body in (plain, html):
+            self.assertIn("No fresh completed monitor run", body)
+            self.assertIn("3 minutes from scheduled time", body)
+            self.assertIn("4 minutes 10 seconds", body)
+            self.assertIn("1.25 seconds", body)
+            self.assertIn("0.25 seconds", body)
+            self.assertIn("Run age at observation", body)
+            self.assertIn("run-stale", body)
+            self.assertNotIn("schedulerDelayMilliseconds:", body)
+        self.assertIn("4 minutes 10 seconds", plain.split("\nIncident\n")[0])
+        self.assertEqual(message["Subject"], "[Example watchdog] PROBLEM: Monitor needs attention")
+        self.assertEqual(message["Message-ID"], "<watchdog-" + event["id"] + "@gmail.com>")
+
+    def test_every_reason_and_http_status_has_a_plain_language_explanation(self):
+        cases = {"fresh": "fresh completed-run evidence", "monitor-disabled": "Monitoring is disabled",
+                 "delivery-disabled": "Alert delivery is disabled", "run-unobserved": "No completed monitor run has been observed",
+                 "run-clock-invalid": "run timestamps", "response-clock-invalid": "30 seconds",
+                 "run-cadence-invalid": "expected schedule", "run-stale": "No fresh completed monitor run",
+                 "run-disabled": "monitoring disabled", "no-targets": "no targets",
+                 "configuration-not-observed": "active configuration", "monitor-phase-error": "processing errors",
+                 "monitor-delivery-error": "failed alert deliveries", "status-schema-invalid": "missing or invalid monitoring data",
+                 "status-credential-invalid": "status token", "status-media-type-invalid": "content type",
+                 "status-response-too-large": "512 KiB", "http-timeout": "10 seconds",
+                 "http-network-error": "network request", "dns-error": "resolve the status endpoint",
+                 "tls-error": "secure TLS connection", "status-json-invalid": "valid UTF-8 JSON",
+                 "unknown-error": "could not confirm monitor health", "http-302": "HTTP 302",
+                 "http-401": "rejected the watchdog's status token", "http-403": "refused access",
+                 "http-404": "Not Found", "http-429": "Too Many Requests",
+                 "http-500": "Internal Server Error", "http-503": "Service Unavailable",
+                 "http-599": "unrecognized status code"}
+        self.assertEqual(w.REASONS - set(cases), set())
+        for reason, explanation in cases.items():
+            with self.subTest(reason=reason):
+                _, plain, html = self.bodies(self.event(w.observation(reason == "fresh", reason)))
+                self.assertIn(explanation, plain)
+                self.assertIn(html_lib.escape(explanation), html)
+                self.assertIn(reason, plain)
+
+    def test_recovery_separates_previous_failure_from_current_health(self):
+        state, _ = w.advance(w.initial_state(), w.observation(False, "run-stale", ageSeconds=240), NOW)
+        state, _ = w.advance(state, w.observation(False, "run-stale", ageSeconds=300), NOW + 60)
+        for offset in (120, 180, 240, 300, 360, 420):
+            state, _ = w.advance(state, w.observation(True, "fresh", ageSeconds=60), NOW + offset)
+        _, plain, html = self.bodies(state["pending"])
+        for body in (plain, html):
+            self.assertIn("Monitor recovered", body)
+            self.assertIn("Previous problem", body)
+            self.assertIn("No fresh completed monitor run", body)
+            self.assertIn("5 minutes", body)
+            self.assertIn("outage summary", body)
+            self.assertIn("1 minute", body)
+            self.assertIn("Worst recorded run age", body)
+        self.assertIn("5 minutes earlier", plain.split("\nIncident\n")[0])
+
+    def test_reminder_and_heartbeat_have_distinct_summaries(self):
+        state, _ = w.advance(w.initial_state(), BAD, NOW)
+        state, _ = w.advance(state, BAD, NOW + 60)
+        w.acknowledge(state, state["pending"], NOW + 60)
+        for offset in range(120, 3661, 60):
+            state, _ = w.advance(state, BAD, NOW + offset)
+        message, plain, html = self.bodies(state["pending"])
+        self.assertIn("REMINDER", message["Subject"])
+        for body in (plain, html):
+            self.assertIn("Monitor still needs attention", body)
+        _, plain, html = self.bodies(self.event(GOOD))
+        for body in (plain, html):
+            self.assertIn("Monitor healthy", body)
+            self.assertIn("fresh completed-run evidence", body)
+            self.assertNotIn("Previous problem", body)
+
+    def test_legacy_incident_without_evidence_does_not_invent_a_run_age(self):
+        event = self.event(w.observation(False, "run-stale"))
+        event["incident"] = {key: event["incident"][key] for key in w.INCIDENT_FIELDS}
+        _, plain, html = self.bodies(event)
+        for body in (plain, html):
+            self.assertIn("3 minutes from scheduled time", body)
+            self.assertNotIn("Run age at observation", body)
+            self.assertNotIn("Worst recorded run age", body)
+            self.assertNotIn("Failing observations: 0", body)
+
+    def test_html_escapes_labels_and_excludes_unsanitized_diagnostics(self):
+        configuration = dict(config(), label="Example <watchdog> & mail")
+        event = self.event(BAD)
+        event["observation"].update(runId="<script>secret-value</script>", error="secret-value")
+        _, plain, html = self.bodies(event, configuration)
+        self.assertIn("Example <watchdog> & mail", plain)
+        self.assertIn("Example &lt;watchdog&gt; &amp; mail", html)
+        self.assertNotIn("<watchdog>", html)
+        for body in (plain, html):
+            self.assertNotIn("secret-value", body)
+            self.assertNotIn("/unused/", body)
+            self.assertNotIn("monitor.example.com", body)
 
 
 class RuntimeTests(unittest.TestCase):
