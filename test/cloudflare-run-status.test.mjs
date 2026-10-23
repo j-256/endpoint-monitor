@@ -13,6 +13,7 @@ const iso = (value) => new Date(value).toISOString()
 const configuration = { schemaVersion: 2, defaults: { probeIntervalMinutes: 1 },
   targets: [{ id: "example-health", url: "https://example.com/private?operator=private", expect: { jsonSubset: { ok: true } } }] }
 const quiet = { log() {}, error() {} }
+const RUN_ID = "c70ff6f9-413b-4567-a086-ff2e47c03540"
 
 async function fixture(context) {
   const db = d1Fixture(context)
@@ -138,6 +139,45 @@ test("late and changed-revision runs cannot refresh health by finishing now", as
   const [target] = await configuredTargets(configuration)
   assert.equal(targetCheckEvidence(oldRuns, { ...remote, revision: 3 }, target, iso(START + 10 * MINUTE)).state, "configuration_changed")
   assert.equal(executionEvidence(oldRuns, iso(START + 10 * MINUTE)).state, "stale")
+})
+
+test("execution separates scheduler delay, runtime and scheduled age without refreshing a late run", async (context) => {
+  const { query, run } = await fixture(context)
+  let ticks = 0
+  await run(START, { clock: () => START + 4 * MINUTE + ticks++ * 1000 })
+  const runs = await readRunSnapshots(query)
+  const evidence = executionEvidence(runs, iso(START + 5 * MINUTE))
+  assert.equal(evidence.state, "stale")
+  assert.deepEqual(evidence.timing, {
+    schedulerDelayMilliseconds: 240000,
+    durationMilliseconds: 2000,
+    ageSeconds: 300,
+  })
+  assert.equal(executionEvidence([], iso(START)).timing, null)
+})
+
+test("bounded optional run telemetry round trips while legacy snapshots remain readable", async (context) => {
+  const { db, query, run: execute } = await fixture(context)
+  await execute(START, { randomRunId: () => RUN_ID })
+  const [run] = await readRunSnapshots(query)
+  assert.equal(run.runId, RUN_ID)
+  assert.ok(Number.isFinite(run.phaseDurationsMilliseconds.configuration))
+  const row = db.sqlite.prepare("SELECT scheduled_minute, snapshot_json FROM monitor_run_status").get()
+  const legacy = JSON.parse(row.snapshot_json)
+  delete legacy.runId
+  delete legacy.phaseDurationsMilliseconds
+  const [restored] = await readRunSnapshots(async () => [{ results: [{ ...row, snapshot_json: JSON.stringify(legacy) }] }])
+  assert.equal("runId" in restored, false)
+  assert.equal("phaseDurationsMilliseconds" in restored, false)
+  assert.equal(executionEvidence([restored], iso(START + 2000)).timing.ageSeconds, 2)
+  for (const patch of [
+    { runId: "https://private.example/secret" },
+    { phaseDurationsMilliseconds: { configuration: -1 } },
+    { phaseDurationsMilliseconds: { "private-phase": 1 } },
+    { phaseDurationsMilliseconds: { configuration: Number.MAX_SAFE_INTEGER + 1 } },
+  ]) await assert.rejects(readRunSnapshots(async () => [{ results: [{ ...row,
+    snapshot_json: JSON.stringify({ ...run, ...patch }),
+  }] }]), { message: "run-status-invalid" })
 })
 
 test("corrupt or oversized snapshot reads fail closed and never echo stored content", async (context) => {

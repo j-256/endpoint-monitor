@@ -9,11 +9,13 @@ import {
   runCloudflareScheduledSafely,
 } from "../src/adapters/cloudflare/runtime.mjs"
 import { readMonitorStatus } from "../src/adapters/cloudflare/d1-store.mjs"
+import { SubrequestBudgetError } from "../src/adapters/cloudflare/fetch-budget.mjs"
 import { d1Fixture } from "./d1.fixture.mjs"
 
 const RUN_AT = "2026-08-26T03:01:00.000Z"
 const RUN_MILLISECONDS = Date.parse(RUN_AT)
 const HOOK_URL = "https://hooks.example.com/hook/cloudevents/abcdefghijklmnopqrstuv"
+const RUN_ID = "c70ff6f9-413b-4567-a086-ff2e47c03540"
 
 function configuration(targets = [{ id: "example-home", url: "https://example.com/" }]) {
   return {
@@ -171,7 +173,8 @@ test("disabled scheduled runs do not require bindings or subrequests", async () 
   assert.equal(summary.enabled, false)
   assert.equal(summary.targetCount, 0)
   assert.equal("subrequests" in summary, false)
-  assert.equal(logger.entries[0].value.event, "endpoint_monitor.run")
+  assert.equal(logger.entries[0].value.event, "endpoint_monitor.run_start")
+  assert.equal(logger.entries.at(-1).value.event, "endpoint_monitor.run")
 })
 
 test("shadow mode persists a 526 incident without delivery state", async (context) => {
@@ -430,6 +433,7 @@ test("hourly runs execute bounded retention maintenance", async (context) => {
   )
   assert.equal(summary.pruned, 0)
   assert.equal(summary.succeededProbes, 1)
+  assert.equal("analytics" in summary.phaseDurationsMilliseconds, false)
 })
 
 test("health and authenticated status routes expose the intended surfaces", async (context) => {
@@ -513,23 +517,129 @@ test("HTTP surface rejects unsupported, hidden, and unavailable routes", async (
   assert.equal(unavailable.status, 503)
 })
 
-test("safe scheduled wrapper emits only a fixed error code", async () => {
+test("configuration failures emit correlated bounded phase diagnostics before completion", async () => {
   const logger = loggerFixture()
+  let elapsed = 0
+  const env = { get ENDPOINT_MONITOR_ENABLED() { elapsed = 37; return "true" } }
   await assert.rejects(
     runCloudflareScheduledSafely(
-      { ENDPOINT_MONITOR_ENABLED: "true" },
+      env,
       RUN_MILLISECONDS,
-      { logger },
+      { logger, clock: () => RUN_MILLISECONDS + 240000,
+        monotonicClock: () => elapsed, randomRunId: () => RUN_ID },
     ),
     (error) => error.message === "monitor-database-unavailable",
   )
-  assert.deepEqual(logger.entries, [{
-    level: "error",
-    value: {
-      errorCode: "monitor-database-unavailable",
-      event: "endpoint_monitor.runtime_error",
-    },
-  }])
+  assert.equal(logger.entries[0].value.event, "endpoint_monitor.run_start")
+  assert.equal(logger.entries[0].value.schedulerDelayMilliseconds, 240000)
+  const failure = logger.entries.at(-1).value
+  assert.equal(failure.event, "endpoint_monitor.runtime_error")
+  assert.equal(failure.errorCode, "monitor-database-unavailable")
+  assert.equal(failure.runId, RUN_ID)
+  assert.equal(failure.phase, "configuration")
+  assert.equal(failure.elapsedMilliseconds, 37)
+  assert.equal(failure.phaseElapsedMilliseconds, 37)
+  assert.deepEqual(failure.phaseDurationsMilliseconds, { configuration: 37 })
+  assert.equal(logger.entries.some(({ value }) => value.event === "endpoint_monitor.run"), false)
+})
+
+test("successful runs correlate bounded phases and measure execution independently of wall-clock changes", async (context) => {
+  const db = d1Fixture(context)
+  await seedConfiguration(db, configuration())
+  const logger = loggerFixture()
+  let elapsed = 0
+  let wall = RUN_MILLISECONDS + 1000
+  const originalPrepare = db.prepare.bind(db)
+  db.prepare = (sql) => {
+    if (sql.includes("FROM monitor_configuration")) elapsed += 19
+    if (sql.includes("INSERT INTO monitor_run_status")) elapsed += 7
+    return originalPrepare(sql)
+  }
+  const summary = await runCloudflareScheduled(runtimeEnv(db), RUN_MILLISECONDS, {
+    clock: () => wall, monotonicClock: () => elapsed, logger, randomRunId: () => RUN_ID,
+    fetchImpl: async () => { elapsed += 83; wall += 1000; return new Response(null, { status: 200 }) },
+  })
+  assert.equal(summary.runId, RUN_ID)
+  assert.equal(summary.durationMilliseconds, 109)
+  assert.equal(summary.phaseDurationsMilliseconds.configuration, 19)
+  assert.equal(summary.phaseDurationsMilliseconds.probing, 83)
+  assert.equal(summary.phaseDurationsMilliseconds["run-status"], 7)
+  assert.equal(summary.runStatusWrites, 1)
+  assert.equal(summary.d1Writes, 1)
+  assert.equal(logger.entries.length, 2)
+  assert.ok(logger.entries.every(({ value }) => value.runId === RUN_ID))
+  const retained = JSON.parse(db.sqlite.prepare("SELECT snapshot_json FROM monitor_run_status").get().snapshot_json)
+  assert.equal(retained.runId, RUN_ID)
+  assert.equal(retained.phaseDurationsMilliseconds.configuration, 19)
+  assert.equal("run-status" in retained.phaseDurationsMilliseconds, false)
+  assert.equal(retained.completedAt, "2026-08-26T03:01:02.000Z")
+})
+
+test("storage failure names its phase without retaining an arbitrary error code or refreshing completion", async (context) => {
+  const db = d1Fixture(context)
+  await seedConfiguration(db, configuration())
+  db.sqlite.exec("CREATE TRIGGER fail_run BEFORE INSERT ON monitor_run_status BEGIN SELECT RAISE(ABORT, 'private storage detail'); END")
+  const logger = loggerFixture()
+  await assert.rejects(runCloudflareScheduledSafely(runtimeEnv(db), RUN_MILLISECONDS, {
+    logger, clock: () => RUN_MILLISECONDS, randomRunId: () => RUN_ID,
+    fetchImpl: async () => new Response(null, { status: 200 }),
+  }), { message: "runtime-failed" })
+  assert.equal(logger.entries.at(-1).value.phase, "run-status")
+  assert.equal(logger.entries.at(-1).value.runId, RUN_ID)
+  assert.equal(JSON.stringify(logger.entries).includes("private storage"), false)
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS count FROM monitor_run_status").get().count, 0)
+})
+
+test("critical phase failures remain correlated, sanitized and incomplete", async (context) => {
+  const cases = [
+    { phase: "configuration", sql: "FROM monitor_configuration" },
+    { phase: "reconciliation", sql: "FROM monitor_target_state" },
+    { phase: "persistence", sql: "INSERT INTO monitor_target_state", status: 526 },
+    { phase: "delivery", sql: "LEFT JOIN monitor_outbox", delivery: true },
+    { phase: "maintenance", sql: "DELETE FROM monitor_signal", at: "2026-08-26T04:00:00.000Z" },
+  ]
+  for (const scenario of cases) {
+    const db = d1Fixture(context)
+    await seedConfiguration(db, configuration())
+    const prepare = db.prepare.bind(db)
+    db.prepare = (sql) => {
+      if (sql.includes(scenario.sql)) {
+        const error = new Error("https://private.example/secret")
+        error.code = "private-api-key"
+        throw error
+      }
+      return prepare(sql)
+    }
+    const at = scenario.at ? Date.parse(scenario.at) : RUN_MILLISECONDS
+    const logger = loggerFixture()
+    const env = runtimeEnv(db, scenario.delivery ? { ENDPOINT_MONITOR_DELIVERY_ENABLED: true,
+      ENDPOINT_MONITOR_HOOKRELAY_URL: HOOK_URL, ENDPOINT_MONITOR_HOOKRELAY_HMAC: "private-hmac" } : {})
+    await assert.rejects(runCloudflareScheduledSafely(env, at, {
+      logger, clock: () => at, randomRunId: () => RUN_ID,
+      fetchImpl: async () => new Response(null, { status: scenario.status ?? 200 }),
+    }), { message: "runtime-failed" }, scenario.phase)
+    const failure = logger.entries.at(-1).value
+    assert.equal(failure.phase, scenario.phase)
+    assert.equal(failure.runId, RUN_ID)
+    assert.ok(Number.isSafeInteger(failure.phaseDurationsMilliseconds[scenario.phase]))
+    assert.equal(JSON.stringify(logger.entries).includes("private"), false)
+    assert.equal(logger.entries.some(({ value }) => value.event === "endpoint_monitor.run"), false)
+    assert.equal(db.sqlite.prepare("SELECT count(*) AS count FROM monitor_run_status").get().count, 0)
+  }
+})
+
+test("probing resource limits leave start and fixed failure evidence without a completion snapshot", async (context) => {
+  const db = d1Fixture(context)
+  await seedConfiguration(db, configuration())
+  const logger = loggerFixture()
+  await assert.rejects(runCloudflareScheduledSafely(runtimeEnv(db), RUN_MILLISECONDS, {
+    logger, clock: () => RUN_MILLISECONDS, randomRunId: () => RUN_ID,
+    fetchImpl: async () => { throw new SubrequestBudgetError() },
+  }), { message: "subrequest-budget-exhausted" })
+  assert.equal(logger.entries.at(-1).value.phase, "probing")
+  assert.equal(logger.entries.at(-1).value.runId, RUN_ID)
+  assert.equal(logger.entries.some(({ value }) => value.event === "endpoint_monitor.run"), false)
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS count FROM monitor_run_status").get().count, 0)
 })
 
 test("safe scheduled wrapper normalizes unknown and budget failures", async (context) => {

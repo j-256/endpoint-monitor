@@ -1079,6 +1079,9 @@ export async function runCli(argv, overrides = {}) {
       const result = await operator.status(new Date(dependencies.clock()).toISOString())
       writeLine(dependencies.stdout, parsed.options.json ? JSON.stringify(result) : [
         `Scheduler: ${result.execution.state}; last completed: ${result.execution.lastRun?.completedAt ?? "unobserved"}`,
+        result.execution.timing
+          ? `Scheduler delay: ${result.execution.timing.schedulerDelayMilliseconds} ms; execution duration: ${result.execution.timing.durationMilliseconds} ms; scheduled age: ${result.execution.timing.ageSeconds} s`
+          : "Timing: unobserved",
         `Configuration revision: ${result.configuration?.revision ?? "absent"}`,
         "TARGET\tCHECK\tCHECKED AT (UTC)\tRETAINED PASS (UTC)",
         ...result.targets.map((target) => [target.targetId, target.state, target.observedAt ?? "unobserved", target.lastSuccessAt ?? "unobserved"].join("\t")),
