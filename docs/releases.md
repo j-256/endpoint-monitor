@@ -31,10 +31,10 @@ This recreates ignored `dist/`, writes the installable tarball, and writes its S
 
 ## Preparing a version
 
-1. Update `package.json` and `package-lock.json` together with `npm version X.Y.Z --no-git-tag-version`.
-2. Move the completed entries under `Unreleased` into a dated `## [X.Y.Z] - YYYY-MM-DD` changelog section and update comparison links.
-3. Run `npm run check` and inspect `npm pack --dry-run --json` if the distribution boundary changed.
-4. Commit the version preparation with a Conventional Commit.
+1. Start on clean `main` with dependencies installed and completed entries under `Unreleased`. Run `npm run release:prepare -- --tag vX.Y.Z` with an increasing stable version.
+2. The command refuses another branch, tracked or untracked changes, an existing local tag, or invalid release metadata. It runs `npm run check` before modifying files and rechecks the branch, working tree, and source commit afterward. A failed check leaves version metadata untouched.
+3. The command uses `npm version --no-git-tag-version --ignore-scripts` to update both package files, moves completed entries into a dated release section, preserves an empty `Unreleased` heading, and updates comparison links. Review those files, run `npm run check` on the prepared version, and inspect `npm pack --dry-run --json` if the distribution boundary changed.
+4. Commit the version preparation with a Conventional Commit. The preparation command creates no commit or tag and never pushes, publishes, or deploys.
 5. Create an annotated `vX.Y.Z` tag on the reviewed `main` commit.
 6. Push `main` and the explicit tag atomically so neither ref is accepted unless both are accepted:
 
