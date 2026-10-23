@@ -58,9 +58,9 @@
     "test:watchdog": "python3 -B -m unittest discover -s watchdog -p 'test_*.py'"
   },
   "dependencies": {
-    "wrangler": "4.151.0"
+    "wrangler": "4.151.3"
   },
   "devDependencies": {
-    "playwright": "1.64.0"
+    "playwright": "1.64.1"
   }
 }
