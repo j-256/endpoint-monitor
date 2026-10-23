@@ -4,18 +4,25 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 
+- D1-authoritative target configuration with revision- and fingerprint-checked imports, remote export, and metadata-only audit history
+- Scoped management credentials, bounded resource reads, and reviewed configuration and triage operations with retained acceptance receipts
 - Correlated Worker run starts, bounded phase diagnostics, and separate scheduler delay, execution duration, and scheduled age
 - Read-only watchdog reports with bounded incident evidence, daily aggregates, transport diagnostics, and sampling/mail outcomes
 - Independent Unix cron watchdog with protected status polling, Gmail alerts and recovery, notification retry, bounded diagnostics, and daily healthy heartbeats
 - Fixed-capacity scheduled-run snapshots with configuration-bound check outcomes, retained passes, and separate scheduler and target freshness
 - Read-only `status` CLI and shared protected management/status evidence without probing targets or reading a local candidate
+- Guarded version preparation that checks clean main and release readiness before updating package metadata and release notes
 
 ### Changed
 
 - Watchdog recovery requires stable observed health to group flapping failures while preserving freshness and problem thresholds
 - Healthy scheduled runs persist only their bounded aggregate completion snapshot while the incident engine retains no ordinary healthy per-target state
+- Generated Worker configurations enforce explicit CPU and subrequest ceilings with documented paid-plan requirements
+- CI renders and publishes generated project cover artifacts
 
 ## [0.2.1] - 2026-08-29
 
@@ -47,7 +54,8 @@ All notable changes to Endpoint Monitor are documented here. The project follows
 - Probe bodies are read only for configured validation, bounded to a 64 KiB prefix or complete JSON body, discarded immediately, and represented by fixed failure codes
 - Resolved delivery transitions wait for their corresponding problem transition, and protected status includes incident acknowledgement and snooze summaries
 
-[Unreleased]: https://github.com/j-256/endpoint-monitor/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/j-256/endpoint-monitor/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/j-256/endpoint-monitor/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.2.1
 [0.2.0]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/j-256/endpoint-monitor/releases/tag/v0.1.0
