@@ -8,6 +8,7 @@ import {
   RESOLUTION_REASON,
   TRANSITION,
 } from "./constants.mjs"
+import { createIncidentSummary } from "./incident-summary.mjs"
 
 const IMMEDIATE_STATUS_SET = new Set(IMMEDIATE_HTTP_STATUSES)
 
@@ -296,6 +297,7 @@ export function createIncidentCloudEvent(incident, transition) {
     source: EVENT_SOURCE,
     specversion: "1.0",
     subject: incident.targetId,
+    summary: createIncidentSummary(incident, transition),
     time: eventTime,
     title: opened
       ? `${incident.targetId} returned ${failureLabel(incident)}`

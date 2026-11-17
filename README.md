@@ -213,6 +213,8 @@ Delivery uses structured CloudEvents 1.0 with source `urn:endpoint-monitor` and 
 - `urn:endpoint-monitor:problem:v1`
 - `urn:endpoint-monitor:recovered:v1`
 
+Each event includes a human-readable `summary` extension explaining the failure, automatic recovery, or operator dismissal, with thresholds, timestamps, signal source, and target URL. The structured incident `data` remains available for automation. Failure thresholds describe configured policy; selected HTTP statuses and provider signals can open incidents immediately. A recovery summary confirms consecutive passing probes, while a dismissal summary explicitly leaves endpoint health unconfirmed. Hookrelay can use the summary as the notification body without interpreting the incident schema.
+
 The exact serialized body is signed as `X-Hookrelay-Signature-256: sha256=<hex>` using HMAC-SHA256. An outbox retries failed delivery with bounded exponential backoff and holds a resolved transition until its corresponding problem transition has been delivered. Incidents opened while delivery is disabled are bridged into the outbox when delivery is enabled, so shadow mode does not lose an ongoing problem. Operator-dismissed incidents use the recovered event type with `resolutionReason: "operator-dismissed"` so downstream consumers can close the existing problem without mistaking the action for a successful probe.
 
 ## HTTP and diagnostics

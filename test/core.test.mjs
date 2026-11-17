@@ -220,3 +220,84 @@ test("incident events use provider-neutral identity and exact target URLs", () =
   assert.equal(recovered.type, EVENT_TYPE.RECOVERED)
   assert.equal(recovered.time, RECOVERED_AT)
 })
+
+test("incident summaries explain validation failures without changing event data", () => {
+  const explanations = {
+    "body-marker-missing": "the configured body marker was not found within the inspected response body",
+    "response-body-too-large": "the response exceeded the body validation limit",
+    "response-body-unreadable": "the response body could not be read",
+    "content-type-mismatch": "the response media type did not match the configured expectation",
+    "response-json-invalid": "the response body was not valid JSON",
+    "json-subset-mismatch": "the JSON response did not match the configured subset",
+    "location-invalid": "the redirect location was invalid",
+    "location-mismatch": "the redirect location did not match the configured expectation",
+    "location-missing": "the response was missing the expected redirect location",
+    "future-validation-error": "the response did not satisfy the configured check (future-validation-error)",
+    "constructor": "the response did not satisfy the configured check (constructor)",
+  }
+  for (const [code, explanation] of Object.entries(explanations)) {
+    const incident = createIncident(
+      target(), httpObservation(target(), 200, OBSERVED_AT, code), "incident-summary", OBSERVED_AT,
+    )
+    const event = createIncidentCloudEvent(incident, TRANSITION.OPENED)
+    assert.ok(event.summary.startsWith(`The endpoint returned HTTP 200, but ${explanation}.\n\n`))
+    assert.ok(event.summary.includes("State: Problem\nFailure threshold: 2\nRecovery threshold: 2"))
+    assert.ok(event.summary.includes(`First observed: ${OBSERVED_AT}`))
+    assert.ok(event.summary.includes(`Opened: ${OBSERVED_AT}`))
+    assert.ok(event.summary.includes("Failure signal: Active probe"))
+    assert.ok(event.summary.endsWith("Target: https://example.com/"))
+    assert.equal(event.data.errorCode, code)
+    assert.equal(event.data.latestStatus, 200)
+    assert.equal(event.data.targetUrl, target().url)
+  }
+})
+
+test("incident summaries distinguish status failures, timeouts, and network failures", () => {
+  const cases = [
+    [httpObservation(target(), 503, OBSERVED_AT), "The endpoint returned HTTP 503, which did not satisfy the configured status check."],
+    [networkObservation("timeout", OBSERVED_AT), "The endpoint did not respond before the configured timeout."],
+    [networkObservation("network", OBSERVED_AT), "The request failed before an HTTP response was received."],
+    [networkObservation("future-network-error", OBSERVED_AT), "The request failed before an HTTP response was received (future-network-error)."],
+  ]
+  for (const [observation, explanation] of cases) {
+    const incident = createIncident(target(), observation, "incident-summary", OBSERVED_AT)
+    assert.ok(createIncidentCloudEvent(incident, TRANSITION.OPENED).summary.startsWith(`${explanation}\n\n`))
+  }
+})
+
+test("incident summaries retain analytics evidence without claiming a failure streak", () => {
+  const incident = createIncident(
+    target(), analyticsObservation(526, OBSERVED_AT, 7), "incident-analytics", OBSERVED_AT,
+  )
+  const event = createIncidentCloudEvent(incident, TRANSITION.OPENED)
+  assert.ok(event.summary.includes("Failure signal: Cloudflare analytics\nObserved failure requests: 7"))
+  assert.ok(event.summary.includes("Failure threshold: 2"))
+  assert.ok(!event.summary.includes("consecutive failures"))
+  const recovered = createIncidentCloudEvent(resolveIncident(incident, RECOVERED_AT), TRANSITION.RESOLVED)
+  assert.ok(recovered.summary.includes("State: Recovered"))
+  assert.ok(recovered.summary.includes("Failure signal: Cloudflare analytics\nObserved failure requests: 7"))
+})
+
+test("incident summaries distinguish automatic recovery from operator dismissal", () => {
+  const incident = createIncident(
+    target(), httpObservation(target(), 200, OBSERVED_AT, "body-marker-missing"), "incident-resolution", OBSERVED_AT,
+  )
+  const recovered = createIncidentCloudEvent(resolveIncident(incident, RECOVERED_AT), TRANSITION.RESOLVED)
+  assert.ok(recovered.summary.startsWith("The endpoint passed the configured checks for 2 consecutive probes.\n\n"))
+  assert.ok(recovered.summary.includes("State: Recovered"))
+  assert.ok(recovered.summary.includes(`Resolved: ${RECOVERED_AT}`))
+  assert.ok(!recovered.summary.includes("returned HTTP 200"))
+  const dismissed = createIncidentCloudEvent(dismissIncident(incident, RECOVERED_AT), TRANSITION.RESOLVED)
+  assert.ok(dismissed.summary.startsWith("An operator dismissed this incident. This does not confirm that the endpoint is healthy.\n\n"))
+  assert.ok(dismissed.summary.includes("State: Dismissed"))
+  assert.ok(!dismissed.summary.includes("passed the configured checks"))
+  assert.equal(dismissed.data.resolutionReason, RESOLUTION_REASON.OPERATOR_DISMISSED)
+})
+
+test("incident summaries describe a recovery threshold of one", () => {
+  const incident = createIncident(
+    target({ recoveryThreshold: 1 }), networkObservation("network", OBSERVED_AT), "incident-single-probe", OBSERVED_AT,
+  )
+  const event = createIncidentCloudEvent(resolveIncident(incident, RECOVERED_AT), TRANSITION.RESOLVED)
+  assert.ok(event.summary.startsWith("The endpoint passed the configured checks for 1 consecutive probe.\n\n"))
+})
