@@ -15,7 +15,7 @@ export const MANAGEMENT_LIMITS = Object.freeze({
   pendingPlans: 100,
   receipts: 1000,
 })
-export const MANAGEMENT_CAPABILITIES = Object.freeze(["read", "configure", "triage"])
+export const MANAGEMENT_CAPABILITIES = Object.freeze(["read", "configure", "triage", "probe"])
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9:_.-]{0,127}$/
 const TOKEN = /^Bearer (epm_[A-Za-z0-9_-]{43})$/
 

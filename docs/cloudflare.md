@@ -36,6 +36,10 @@ Apply the additive migration before the updated CLI or management authority is u
 
 Configuration imports enforce the adapter's existing per-run probe ceiling and a 256 KiB canonical document limit before writing. These are explicit application bounds, not evidence of measured Free-plan CPU compliance. Accepted imports write the configuration and bounded audit metadata; configuration reads and unchanged imports write nothing. Imports add no separate scheduled work or logging stream. Ordinary healthy probes retain their no-per-target-write invariant, with the aggregate run-status exception documented below. Paid-plan access is not used to bypass those limits.
 
+## Manual diagnostic resource use
+
+An authorized management diagnostic checks one saved target with one public fetch, manual redirects, a response-validation cap of 64 KiB, and its saved timeout of at most 30 seconds. The adapter reads configuration before and after the request and writes no target, incident, delivery, or run-status records. These are application bounds and a per-request estimate, not measured Free-plan CPU compliance; JSON validation and configuration fingerprinting still consume CPU under the execution ceilings above. Calling applications must limit deliberate diagnostic volume and deduplicate uncertain retries. See the [management diagnostic contract](management.md#manual-diagnostics) for permissions and recovery.
+
 ## Public probe routing
 
 The Worker configuration enables Cloudflare's [`global_fetch_strictly_public`](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public) compatibility flag. Global `fetch()` therefore enters the public Cloudflare routing path instead of using same-zone behavior that can bypass mapped Workers and other public controls. This makes each probe reflect what an external client reaches, which is the monitoring contract.

@@ -7,9 +7,11 @@ import {
   readManagementSnapshot, readManagementTargets,
 } from "./management-read.mjs"
 import { MANAGEMENT_OPERATION_KIND, applyManagementOperation, planManagementOperation, readManagementOperation } from "./management-operations.mjs"
+import { probeManagementTarget } from "./management-probe.mjs"
 import { ConfigurationAuthorityError } from "./configuration-authority.mjs"
 
 const COMMANDS = Object.freeze({
+  probe: ["actorId", "targetId", "expectedRevision", "requestId"],
   snapshot: [], configuration: [], targets: ["cursor"], target: ["targetId"],
   incidents: ["cursor", "targetId", "status"], incident: ["incidentId", "cursor"],
   configuration_plan: ["actorId", "expectedRevision", "configuration"],
@@ -17,13 +19,14 @@ const COMMANDS = Object.freeze({
   operation_apply: ["actorId", "planId"], operation_get: ["actorId", "planId"],
 })
 const REQUIRED = Object.freeze({
+  probe: ["actorId", "targetId", "expectedRevision", "requestId"],
   target: ["targetId"], incident: ["incidentId"],
   configuration_plan: ["actorId", "expectedRevision", "configuration"],
   triage_plan: ["actorId", "expectedRevision", "incidentId", "action"],
   operation_apply: ["actorId", "planId"], operation_get: ["actorId", "planId"],
 })
 
-export async function handleManagement(request, env, { clock = Date.now, randomUUID = () => crypto.randomUUID(), logger = console } = {}) {
+export async function handleManagement(request, env, { clock = Date.now, randomUUID = () => crypto.randomUUID(), logger = console, fetchImpl = globalThis.fetch } = {}) {
   try {
     const principal = await authenticateManagement(request, env, clock())
     if (request.method !== "POST") {
@@ -37,16 +40,17 @@ export async function handleManagement(request, env, { clock = Date.now, randomU
     const command = envelope.command
     const input = strictObject(envelope.input, ["workspaceId", ...COMMANDS[command]], ["workspaceId", ...(REQUIRED[command] ?? [])])
     managementId(input.workspaceId)
-    for (const field of ["actorId", "targetId", "incidentId", "planId"]) {
+    for (const field of ["actorId", "targetId", "incidentId", "planId", "requestId"]) {
       if (input[field] !== undefined) managementId(input[field])
     }
     if (input.expectedRevision !== undefined) managementRevision(input.expectedRevision)
-    const capability = command === "configuration_plan" ? "configure" : command === "triage_plan" ? "triage" : "read"
+    const capability = command === "probe" ? "probe" : command === "configuration_plan" ? "configure" : command === "triage_plan" ? "triage" : "read"
     authorizeManagement(principal, input.workspaceId, capability, clock())
     const now = new Date(clock()).toISOString()
     const db = managementDatabase(env)
     let result
     switch (command) {
+      case "probe": result = await probeManagementTarget(db, principal, input, { clock, fetchImpl, logger }); break
       case "snapshot": result = await readManagementSnapshot(env, now); break
       case "configuration": result = { readAt: now, configuration: await readConfiguration(db) }; break
       case "targets": case "target": result = await readManagementTargets(db, input, now); break

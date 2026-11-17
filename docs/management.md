@@ -13,9 +13,9 @@ Install `MANAGEMENT_CREDENTIALS` as a Worker secret using a protected stdin or i
 | `tokenHash` | Lower-case hexadecimal SHA-256 digest of the complete bearer token |
 | `expiresAt` | UTC ISO timestamp including milliseconds |
 | `workspaceIds` | Explicit nonempty workspace allowlist |
-| `capabilities` | Nonempty subset of `read`, `configure`, and `triage` |
+| `capabilities` | Nonempty subset of `read`, `configure`, `triage`, and `probe` |
 
-Generate a cryptographically random 32-byte base64url value and prefix it with `epm_`. Store the complete token only in the calling server's secret store, never in browser state, source, screenshots, logs, or command arguments. The provider stores its digest, not the token. Credential IDs and digests must be unique; malformed catalogs fail closed. All operations require `read`, with `configure` or `triage` additionally required for the corresponding plan and application. Status-endpoint and Cloudflare account tokens do not grant management access.
+Generate a cryptographically random 32-byte base64url value and prefix it with `epm_`. Store the complete token only in the calling server's secret store, never in browser state, source, screenshots, logs, or command arguments. The provider stores its digest, not the token. Credential IDs and digests must be unique; malformed catalogs fail closed. All operations require `read`, with `configure` or `triage` additionally required for the corresponding plan and application, and `probe` required for a manual diagnostic. Status-endpoint and Cloudflare account tokens do not grant management access.
 
 A provider instance owns one target configuration. Allowlisting a workspace intentionally grants it access to that instance's resources; it does not partition targets into separate tenants. Applications own narrower repository or project associations and enforce their own memberships. Use separate provider instances when target configuration itself must be isolated. Operation records are additionally scoped to workspace, actor, credential identity, and credential revision, so one workspace cannot inspect another workspace's receipts even when both can view shared provider resources.
 
@@ -48,6 +48,7 @@ Every command requires `workspaceId`. Optional paging cursors are opaque to call
 | `configuration` | None | Private executing portable document and revision, or an absent configuration |
 | `targets` | Optional `cursor` | Target page with response expectations, retained check results, and separate exceptional-state evidence |
 | `target` | `targetId` | One target in the same target-page result shape |
+| `probe` | `actorId`, `requestId`, `targetId`, `expectedRevision` | One diagnostic of a saved target, separate from scheduled evidence and incidents |
 | `incidents` | Optional `status` (`open`, `resolved`, or `all`), `targetId`, `cursor` | Incident page including revisions |
 | `incident` | `incidentId`, optional `cursor` | Incident and a page of immutable triage history |
 | `configuration_plan` | `actorId`, `expectedRevision`, `configuration` | Review bound to the exact candidate and remote revision |
@@ -60,6 +61,16 @@ Configuration plans accept the portable schema documented in the README and enfo
 Triage actions are `acknowledged`, `snoozed`, and `dismissed`. Only snooze accepts `until`, which must be a future RFC 3339 timestamp; it is normalized to UTC in the review. Notes are bounded plain text and must not contain secrets. Acknowledgement records attention, not recovery. Snooze delays pending problem delivery but does not pause probes or retract sent messages. Dismissal records an operator resolution; persistent failures can open another incident. The management handler never calls Hookrelay directly. The existing outbox and scheduled delivery own notification attempts and ordering.
 
 The CLI uses the same triage statement builder, and CLI actions invalidate pending management reviews through incident revisions. Incident detail in the CLI shows a bounded latest history and explicitly marks omitted older actions; management history supports paging them.
+
+## Manual diagnostics
+
+The `probe` command requires `read` and the explicit `probe` capability. It checks one saved target using its effective method, timeout, accepted statuses, and response assertions. Callers cannot supply a URL or override the saved checks. A stale configuration revision is rejected before fetching; a configuration change during the request is reported with `configurationMatches: false`. The scheduled enabled setting does not prevent an explicitly authorized diagnostic.
+
+The result contains the caller's correlation `requestId`, target ID, configuration revision and fingerprints, start and completion times, elapsed milliseconds, outcome, HTTP status, and a fixed error code. It contains no response body, response headers, URL, or credential. The request stays within the saved target timeout, including body validation. Request diagnostics log correlation, target ID, revision, outcome, and timings without private endpoint details.
+
+Diagnostics do not update incidents, thresholds, notifications, target state, or the scheduler's retained run evidence. They perform no durable provider writes. A diagnostic pass is separate from scheduled health and does not resolve an incident. The provider does not retain diagnostic receipts or deduplicate `requestId`; trusted calling applications must journal intent and deduplicate before forwarding. A lost response must not be automatically resubmitted. Authority lost after dispatch returns `indeterminate`, which means the request ran but its result cannot be returned under the expired authority. A new deliberate check uses a new request ID.
+
+Deploy the command before granting `probe` to a management credential. Strict clients must support the capability before it is added to their credentials; an older client may reject an unknown capability in all responses. Keep `read` on the credential. Existing read/configure/triage grants do not implicitly authorize diagnostics.
 
 ## Freshness and recovery
 

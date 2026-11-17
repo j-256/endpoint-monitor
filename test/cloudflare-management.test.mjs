@@ -38,7 +38,8 @@ async function fixture(context, { initialize = true } = {}) {
       ...(["GET", "HEAD"].includes(options.method) ? {} : { body: options.body ?? JSON.stringify({ version: 1, command, input: { workspaceId: "workspace-a", ...input } }) }),
     })
     const response = await handleManagement(request, options.env ?? env, {
-      clock: () => now, randomUUID: () => `operation-${++sequence}`, logger: { warn: (value) => logs.push(value) },
+      clock: () => now, randomUUID: () => `operation-${++sequence}`, logger: { warn: (value) => logs.push(value), info: (value) => logs.push(value) },
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     })
     return { status: response.status, body: await response.json(), headers: response.headers }
   }
@@ -310,4 +311,114 @@ test("review storage is bounded and expiration frees only unaccepted reviews", a
   result(await run("configuration_plan", input))
   assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS count FROM monitor_management_operation").get().count, 2)
   assert.equal(result(await run("operation_get", { ...actor, planId: kept.id })).status, "applied")
+})
+
+const probeInput = Object.freeze({ ...actor, targetId: "example-health", expectedRevision: 1, requestId: "8ba01cc4-cbc8-42b5-b892-62c5bf226a0c" })
+const probeCredentials = JSON.stringify([{ ...PRINCIPAL, capabilities: ["read", "probe"] }])
+
+test("diagnostics check one saved target without changing incidents or scheduled evidence", async (context) => {
+  const { run, env, db, open, logs } = await fixture(context)
+  env.MANAGEMENT_CREDENTIALS = probeCredentials
+  await open()
+  const before = db.sqlite.prepare("SELECT total_changes() AS count").get().count
+  const requests = []
+  const diagnostic = result(await run("probe", probeInput, { fetchImpl: async (url, init) => {
+    requests.push({ url, init })
+    return new Response("private response body", { status: 200 })
+  } }))
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].url, "https://example.com/health")
+  assert.equal(requests[0].init.redirect, "manual")
+  assert.equal(diagnostic.targetId, probeInput.targetId)
+  assert.equal(diagnostic.configurationRevision, 1)
+  assert.equal(diagnostic.configurationMatches, true)
+  assert.equal(diagnostic.outcome, "success")
+  assert.equal(diagnostic.httpStatus, 200)
+  assert.equal(diagnostic.errorCode, null)
+  assert.equal(diagnostic.startedAt, NOW)
+  assert.equal(diagnostic.completedAt, NOW)
+  assert.ok(diagnostic.durationMilliseconds >= 0)
+  assert.match(diagnostic.configFingerprint, /^sha256:[a-f0-9]{64}$/)
+  assert.match(diagnostic.targetFingerprint, /^sha256:[a-f0-9]{64}$/)
+  assert.equal(JSON.stringify({ diagnostic, logs }).includes("private response"), false)
+  assert.equal(JSON.stringify({ diagnostic, logs }).includes("https://"), false)
+  assert.equal(db.sqlite.prepare("SELECT total_changes() AS count").get().count, before)
+  assert.equal(result(await run("target", { targetId: probeInput.targetId })).items[0].evidence.state, "incident")
+  assert.equal(result(await run("snapshot")).execution.state, "unobserved")
+  assert.ok(logs.some((value) => JSON.parse(value).event === "endpoint_monitor.diagnostic"))
+})
+
+test("diagnostics reject missing authority, stale revisions, and caller-selected URLs before fetch", async (context) => {
+  const { run, env } = await fixture(context)
+  const fetchImpl = () => assert.fail("Denied diagnostics must not fetch")
+  result(await run("probe", probeInput, { fetchImpl }), 403)
+  env.MANAGEMENT_CREDENTIALS = probeCredentials
+  result(await run("probe", { ...probeInput, workspaceId: "workspace-b" }, { fetchImpl }), 404)
+  result(await run("probe", { ...probeInput, expectedRevision: 0 }, { fetchImpl }), 409)
+  result(await run("probe", { ...probeInput, targetId: "absent" }, { fetchImpl }), 404)
+  result(await run("probe", { ...probeInput, url: "https://example.org" }, { fetchImpl }), 400)
+  result(await run("probe", { targetId: "example-health", expectedRevision: 1 }, { fetchImpl }), 400)
+})
+
+test("diagnostics return fixed failures and flag configuration changes while probing", async (context) => {
+  const { run, env, db } = await fixture(context)
+  env.MANAGEMENT_CREDENTIALS = probeCredentials
+  const failed = result(await run("probe", probeInput, { fetchImpl: async () => { throw new Error("private endpoint and credential") } }))
+  assert.equal(failed.outcome, "failure")
+  assert.equal(failed.httpStatus, null)
+  assert.equal(failed.errorCode, "network")
+  const changed = result(await run("probe", probeInput, { fetchImpl: async () => {
+    const candidate = await configurationCandidate({ ...CANDIDATE, targets: [{ id: "example-health", url: "https://example.com/changed" }] })
+    await writeConfigurationAuthority(d1ConfigurationQuery(db), candidate.portable, {
+      expectedRevision: 1, expectedFingerprint: candidate.configFingerprint, updatedAt: NOW,
+    })
+    return new Response(null, { status: 503 })
+  } }))
+  assert.equal(changed.configurationMatches, false)
+  assert.equal(changed.configurationRevision, 1)
+  assert.equal(changed.outcome, "failure")
+  assert.equal(changed.httpStatus, 503)
+})
+
+test("diagnostics enforce response expectations and deadline without storing healthy target state", async (context) => {
+  const { run, env, db } = await fixture(context)
+  env.MANAGEMENT_CREDENTIALS = probeCredentials
+  const candidate = await configurationCandidate({ ...CANDIDATE, targets: [{
+    ...CANDIDATE.targets[0], timeoutMilliseconds: 100,
+    expectedStatuses: [200], expect: { contentType: "application/json", jsonSubset: { ready: true } },
+  }] })
+  await writeConfigurationAuthority(d1ConfigurationQuery(db), candidate.portable, {
+    expectedRevision: 1, expectedFingerprint: candidate.configFingerprint, updatedAt: NOW,
+  })
+  const input = { ...probeInput, expectedRevision: 2 }
+  const mismatch = result(await run("probe", input, { fetchImpl: async () => Response.json({ ready: false }) }))
+  assert.equal(mismatch.outcome, "failure")
+  assert.equal(mismatch.errorCode, "json-subset-mismatch")
+  context.mock.timers.enable({ apis: ["setTimeout"] })
+  let started
+  const fetching = new Promise((resolve) => { started = resolve })
+  const pending = run("probe", input, { fetchImpl: () => { started(); return new Promise(() => {}) } })
+  await fetching
+  context.mock.timers.tick(100)
+  const timedOut = result(await pending)
+  assert.equal(timedOut.outcome, "failure")
+  assert.equal(timedOut.errorCode, "timeout")
+  assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS count FROM monitor_target_state").get().count, 0)
+})
+
+test("a credential expiring during a diagnostic preserves an uncertain execution outcome", async (context) => {
+  const { run, env, setNow, logs } = await fixture(context)
+  env.MANAGEMENT_CREDENTIALS = JSON.stringify([{ ...PRINCIPAL,
+    expiresAt: new Date(Date.parse(NOW) + 1000).toISOString(), capabilities: ["read", "probe"],
+  }])
+  let fetches = 0
+  const response = await run("probe", probeInput, { fetchImpl: async () => {
+    fetches++
+    setNow(Date.parse(NOW) + 2000)
+    return new Response(null, { status: 200 })
+  } })
+  assert.equal(fetches, 1)
+  result(response, 503)
+  assert.equal(response.body.error.code, "indeterminate")
+  assert.ok(logs.some((value) => JSON.parse(value).requestId === probeInput.requestId))
 })
